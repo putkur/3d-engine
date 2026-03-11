@@ -49,13 +49,13 @@ export class CameraController {
 
   // Spherical coords (orbit) / Euler angles (fly/FP)
   private _yaw = 0;    // degrees
-  private _pitch = -20; // degrees
+  private _pitch = 20;  // degrees (positive = above target)
   private _minPitch: number;
   private _maxPitch: number;
 
   // Smoothed values
   private _currentYaw = 0;
-  private _currentPitch = -20;
+  private _currentPitch = 20;
   private _currentDistance: number;
   private _currentTarget = Vector3.zero();
 

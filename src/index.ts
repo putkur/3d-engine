@@ -39,3 +39,10 @@ export { PerspectiveCamera } from './camera/PerspectiveCamera';
 export { OrthographicCamera } from './camera/OrthographicCamera';
 export { CameraController, CameraMode } from './camera/CameraController';
 export type { CameraControllerOptions } from './camera/CameraController';
+
+// Lighting
+export { Light, LightType } from './lighting/Light';
+export { DirectionalLight } from './lighting/DirectionalLight';
+export { PointLight } from './lighting/PointLight';
+export { SpotLight } from './lighting/SpotLight';
+export { ShadowMap } from './lighting/ShadowMap';
