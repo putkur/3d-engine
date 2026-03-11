@@ -5,30 +5,8 @@ import { Mesh } from '../scene/Mesh';
 import { SceneNode } from '../scene/SceneNode';
 import { Matrix4 } from '../math/Matrix4';
 import { Texture } from '../renderer/Texture';
-
-// Minimal depth-only vertex shader — transforms vertices to light space
-const shadowVert = /* glsl */ `#version 300 es
-precision highp float;
-
-layout(location = 0) in vec3 a_position;
-
-uniform mat4 u_lightSpaceMatrix;
-uniform mat4 u_model;
-
-void main() {
-  gl_Position = u_lightSpaceMatrix * u_model * vec4(a_position, 1.0);
-}
-`;
-
-// Minimal depth-only fragment shader — writes depth implicitly
-const shadowFrag = /* glsl */ `#version 300 es
-precision highp float;
-out vec4 fragColor;
-void main() {
-  // Depth is written automatically. We need a valid frag output for WebGL2.
-  fragColor = vec4(1.0);
-}
-`;
+import shadowVert from '../renderer/shaders/shadow.vert';
+import shadowFrag from '../renderer/shaders/shadow.frag';
 
 /**
  * Shadow mapping utility.

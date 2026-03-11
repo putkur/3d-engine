@@ -20,6 +20,10 @@ module.exports = (env, argv) => {
         use: 'ts-loader',
         exclude: /node_modules/,
       },
+      {
+        test: /\.(vert|frag|glsl)$/,
+        type: 'asset/source',
+      },
     ],
   },
   plugins: [

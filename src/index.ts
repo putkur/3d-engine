@@ -63,3 +63,10 @@ export { ContactManifold } from './physics/ContactManifold';
 export type { ContactPoint } from './physics/ContactManifold';
 export { CollisionResolver } from './physics/CollisionResolver';
 export { Constraint, DistanceConstraint, HingeConstraint, FixedConstraint } from './physics/Constraints';
+
+// Loaders
+export { TextureLoader } from './loaders/TextureLoader';
+export { OBJLoader } from './loaders/OBJLoader';
+export { GLTFLoader } from './loaders/GLTFLoader';
+export { AssetManager } from './loaders/AssetManager';
+export type { Asset, ProgressCallback } from './loaders/AssetManager';
