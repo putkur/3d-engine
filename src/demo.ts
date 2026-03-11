@@ -1,58 +1,90 @@
 import { Engine } from './core/Engine';
 import { Renderer } from './renderer/Renderer';
 import { ShaderProgram } from './renderer/ShaderProgram';
-import { VertexBuffer } from './renderer/VertexBuffer';
-import { IndexBuffer } from './renderer/IndexBuffer';
-import { VertexArray } from './renderer/VertexArray';
 import { Matrix4 } from './math/Matrix4';
-import { basicVert, basicFrag } from './renderer/shaders';
+import { Vector3 } from './math/Vector3';
+import { Scene } from './scene/Scene';
+import { Geometry } from './scene/Geometry';
+import { Material } from './scene/Material';
+import { Mesh } from './scene/Mesh';
+import { standardVert, standardFrag } from './renderer/shaders';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
 
 const gl = engine.gl;
 const renderer = new Renderer(gl);
+renderer.configure();
 
 // --- Shader ---
-const program = ShaderProgram.create(gl, basicVert, basicFrag);
+const program = ShaderProgram.create(gl, standardVert, standardFrag);
 
-// --- Triangle geometry (interleaved: pos xyz + color rgb) ---
-// prettier-ignore
-const vertices = new Float32Array([
-  // x,     y,    z,    r,    g,    b
-   0.0,   0.5,  0.0,  1.0,  0.0,  0.0,  // top — red
-  -0.5,  -0.5,  0.0,  0.0,  1.0,  0.0,  // bottom-left — green
-   0.5,  -0.5,  0.0,  0.0,  0.0,  1.0,  // bottom-right — blue
-]);
+// --- Scene setup ---
+const scene = new Scene();
 
-const indices = new Uint16Array([0, 1, 2]);
+// Create a box
+const boxGeo = Geometry.createBox(1, 1, 1);
+const boxMat = new Material(program, { color: [0.2, 0.6, 1.0, 1.0] });
+const box = new Mesh(boxGeo, boxMat, 'box');
+scene.add(box);
 
-const vbo = new VertexBuffer(gl, vertices);
-const ibo = new IndexBuffer(gl, indices);
-const vao = new VertexArray(gl);
+// Create a sphere
+const sphereGeo = Geometry.createSphere(0.4, 24, 16);
+const sphereMat = new Material(program, { color: [1.0, 0.3, 0.2, 1.0] });
+const sphere = new Mesh(sphereGeo, sphereMat, 'sphere');
+sphere.transform.setPosition(2, 0, 0);
+scene.add(sphere);
 
-const FLOAT = 4; // bytes
-const stride = 6 * FLOAT; // 3 pos + 3 color
+// Create a ground plane
+const planeGeo = Geometry.createPlane(8, 8);
+const planeMat = new Material(program, {
+  color: [0.3, 0.8, 0.3, 1.0],
+  cullFace: false,
+});
+const plane = new Mesh(planeGeo, planeMat, 'ground');
+plane.transform.setPosition(0, -1, 0);
+scene.add(plane);
 
-vao.addVertexBuffer(vbo, [
-  { location: 0, size: 3, stride, offset: 0 },          // a_position
-  { location: 1, size: 3, stride, offset: 3 * FLOAT },   // a_color
-]);
-vao.setIndexBuffer(ibo);
+// --- Camera matrices ---
+const aspect = engine.canvas.width / engine.canvas.height;
+const projection = Matrix4.perspective(60, aspect, 0.1, 100);
+const eye = new Vector3(3, 3, 5);
+const center = Vector3.zero();
+const up = Vector3.up();
+const view = Matrix4.lookAt(eye, center, up);
+const viewProjection = projection.multiply(view);
 
-// Identity MVP — draws in clip space
-const mvp = Matrix4.identity();
-
-// Disable culling for the triangle (we want to see it from both sides)
-renderer.setCullFace(false);
+let time = 0;
 
 engine.on('render', () => {
+  time += engine.clock.getDelta();
+
+  // Rotate the box
+  box.transform.setRotationFromEuler(time * 30, time * 45, 0);
+
+  // Orbit the sphere around the box
+  sphere.transform.setPosition(Math.cos(time) * 2, 0, Math.sin(time) * 2);
+
+  // Update all world matrices
+  scene.updateMatrixWorld();
+
+  // --- Render ---
   renderer.clear();
   renderer.resetStats();
-  renderer.useProgram(program);
-  program.setMat4('u_modelViewProjection', mvp.data);
-  program.setVec4('u_color', 1, 1, 1, 1);
-  renderer.drawElements(vao);
+
+  // Draw each mesh in the scene
+  for (const node of scene.meshes) {
+    const mesh = node as Mesh;
+    if (!mesh.visible) continue;
+
+    const vao = mesh.ensureGPUBuffers(gl);
+
+    mesh.material.bind(gl);
+    mesh.material.shader.setMat4('u_model', mesh.transform.worldMatrix.data);
+    mesh.material.shader.setMat4('u_viewProjection', viewProjection.data);
+
+    renderer.drawElements(vao);
+  }
 });
 
 engine.start();

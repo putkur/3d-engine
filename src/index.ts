@@ -21,4 +21,14 @@ export type { VertexAttribute } from './renderer/VertexArray';
 export { Texture, TextureWrap, TextureFilter } from './renderer/Texture';
 export type { TextureOptions } from './renderer/Texture';
 export { Framebuffer } from './renderer/Framebuffer';
-export { basicVert, basicFrag, phongVert, phongFrag } from './renderer/shaders';
+export { basicVert, basicFrag, standardVert, standardFrag, phongVert, phongFrag } from './renderer/shaders';
+
+// Scene
+export { Transform } from './scene/Transform';
+export { SceneNode } from './scene/SceneNode';
+export { Scene } from './scene/Scene';
+export { Geometry } from './scene/Geometry';
+export type { GeometryData } from './scene/Geometry';
+export { Material } from './scene/Material';
+export type { MaterialOptions } from './scene/Material';
+export { Mesh } from './scene/Mesh';

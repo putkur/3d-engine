@@ -30,6 +30,49 @@ void main() {
 }
 `;
 
+// Standard unlit vertex shader — works with Mesh layout (pos=0, normal=1, uv=2)
+export const standardVert = /* glsl */ `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_uv;
+
+uniform mat4 u_model;
+uniform mat4 u_viewProjection;
+
+out vec3 v_normal;
+out vec2 v_uv;
+
+void main() {
+  v_normal = a_normal;
+  v_uv = a_uv;
+  gl_Position = u_viewProjection * u_model * vec4(a_position, 1.0);
+}
+`;
+
+// Standard unlit fragment shader — basic directional shading for visibility
+export const standardFrag = /* glsl */ `#version 300 es
+precision highp float;
+
+in vec3 v_normal;
+in vec2 v_uv;
+
+out vec4 fragColor;
+
+uniform vec4 u_color;
+
+void main() {
+  // Simple directional lighting for visual depth
+  vec3 norm = normalize(v_normal);
+  vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
+  float diff = max(dot(norm, lightDir), 0.0);
+  float ambient = 0.2;
+  float light = ambient + diff * 0.8;
+  fragColor = u_color * vec4(vec3(light), 1.0);
+}
+`;
+
 // Blinn-Phong vertex shader
 export const phongVert = /* glsl */ `#version 300 es
 precision highp float;
