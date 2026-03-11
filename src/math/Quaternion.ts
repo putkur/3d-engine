@@ -172,26 +172,23 @@ export class Quaternion {
     return out;
   }
 
-  /** Create quaternion that looks from origin along `forward` direction, with given `up`. */
+  /**
+   * Create quaternion that looks along `forward` direction, with given `up`.
+   * Right-hand system: camera looks along -Z, so the resulting rotation maps
+   * local -Z to the given forward direction.
+   */
   static lookRotation(forward: Vector3, up?: Vector3): Quaternion {
     const u = up ?? Vector3.up();
-    // Build a rotation matrix from axes, then extract quaternion
     const f = forward.normalize();
-    const r = u.cross(f).normalize();
-    const correctedUp = f.cross(r);
+    const r = f.cross(u).normalize();       // right = forward × up
+    const correctedUp = r.cross(f);          // up    = right × forward
 
-    // Construct rotation matrix (column-major for gl-matrix)
-    const m = mat4.create();
-    m[0] = r.x;       m[1] = r.y;       m[2] = r.z;       m[3] = 0;
-    m[4] = correctedUp.x; m[5] = correctedUp.y; m[6] = correctedUp.z; m[7] = 0;
-    m[8] = f.x;       m[9] = f.y;       m[10] = f.z;      m[11] = 0;
-    m[12] = 0;         m[13] = 0;         m[14] = 0;         m[15] = 1;
-
+    // Column-major rotation matrix: col0=right, col1=up, col2=-forward (+Z away)
     const out = new Quaternion();
     quat.fromMat3(out.data, [
-      m[0], m[1], m[2],
-      m[4], m[5], m[6],
-      m[8], m[9], m[10],
+      r.x,          r.y,          r.z,
+      correctedUp.x, correctedUp.y, correctedUp.z,
+      -f.x,         -f.y,         -f.z,
     ]);
     quat.normalize(out.data, out.data);
     return out;

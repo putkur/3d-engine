@@ -32,3 +32,10 @@ export type { GeometryData } from './scene/Geometry';
 export { Material } from './scene/Material';
 export type { MaterialOptions } from './scene/Material';
 export { Mesh } from './scene/Mesh';
+
+// Camera
+export { Camera } from './camera/Camera';
+export { PerspectiveCamera } from './camera/PerspectiveCamera';
+export { OrthographicCamera } from './camera/OrthographicCamera';
+export { CameraController, CameraMode } from './camera/CameraController';
+export type { CameraControllerOptions } from './camera/CameraController';

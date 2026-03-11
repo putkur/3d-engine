@@ -1,12 +1,13 @@
 import { Engine } from './core/Engine';
 import { Renderer } from './renderer/Renderer';
 import { ShaderProgram } from './renderer/ShaderProgram';
-import { Matrix4 } from './math/Matrix4';
 import { Vector3 } from './math/Vector3';
 import { Scene } from './scene/Scene';
 import { Geometry } from './scene/Geometry';
 import { Material } from './scene/Material';
 import { Mesh } from './scene/Mesh';
+import { PerspectiveCamera } from './camera/PerspectiveCamera';
+import { CameraController, CameraMode } from './camera/CameraController';
 import { standardVert, standardFrag } from './renderer/shaders';
 
 const engine = new Engine('#engine-canvas');
@@ -45,14 +46,22 @@ const plane = new Mesh(planeGeo, planeMat, 'ground');
 plane.transform.setPosition(0, -1, 0);
 scene.add(plane);
 
-// --- Camera matrices ---
+// --- Camera ---
 const aspect = engine.canvas.width / engine.canvas.height;
-const projection = Matrix4.perspective(60, aspect, 0.1, 100);
-const eye = new Vector3(3, 3, 5);
-const center = Vector3.zero();
-const up = Vector3.up();
-const view = Matrix4.lookAt(eye, center, up);
-const viewProjection = projection.multiply(view);
+const camera = new PerspectiveCamera(60, aspect, 0.1, 100);
+scene.add(camera);
+
+const controller = new CameraController(camera, engine.canvas, {
+  mode: CameraMode.ORBIT,
+  target: Vector3.zero(),
+  distance: 7,
+  damping: 0.08,
+});
+
+// Handle resize
+engine.on('resize', () => {
+  camera.aspect = engine.canvas.width / engine.canvas.height;
+});
 
 let time = 0;
 
@@ -65,8 +74,14 @@ engine.on('render', () => {
   // Orbit the sphere around the box
   sphere.transform.setPosition(Math.cos(time) * 2, 0, Math.sin(time) * 2);
 
-  // Update all world matrices
+  // Update camera controller
+  controller.update(engine.clock.getDelta());
+
+  // Update all world matrices (includes camera)
   scene.updateMatrixWorld();
+
+  // Get the view-projection from the camera
+  const viewProjection = camera.viewProjectionMatrix;
 
   // --- Render ---
   renderer.clear();
