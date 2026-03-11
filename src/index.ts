@@ -46,3 +46,20 @@ export { DirectionalLight } from './lighting/DirectionalLight';
 export { PointLight } from './lighting/PointLight';
 export { SpotLight } from './lighting/SpotLight';
 export { ShadowMap } from './lighting/ShadowMap';
+
+// Physics
+export { PhysicsWorld } from './physics/PhysicsWorld';
+export { RigidBody, BodyType } from './physics/RigidBody';
+export { Collider, ColliderType } from './physics/Collider';
+export type { AABB } from './physics/Collider';
+export { SphereCollider } from './physics/SphereCollider';
+export { BoxCollider } from './physics/BoxCollider';
+export { PlaneCollider } from './physics/PlaneCollider';
+export { CapsuleCollider } from './physics/CapsuleCollider';
+export { BroadPhase } from './physics/BroadPhase';
+export type { BroadPhasePair } from './physics/BroadPhase';
+export { NarrowPhase } from './physics/NarrowPhase';
+export { ContactManifold } from './physics/ContactManifold';
+export type { ContactPoint } from './physics/ContactManifold';
+export { CollisionResolver } from './physics/CollisionResolver';
+export { Constraint, DistanceConstraint, HingeConstraint, FixedConstraint } from './physics/Constraints';

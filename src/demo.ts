@@ -14,6 +14,11 @@ import { PointLight } from './lighting/PointLight';
 import { ShadowMap } from './lighting/ShadowMap';
 import { Light, LightType } from './lighting/Light';
 import { phongVert, phongFrag } from './renderer/shaders';
+import { PhysicsWorld } from './physics/PhysicsWorld';
+import { RigidBody, BodyType } from './physics/RigidBody';
+import { BoxCollider } from './physics/BoxCollider';
+import { SphereCollider } from './physics/SphereCollider';
+import { PlaneCollider } from './physics/PlaneCollider';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -28,49 +33,123 @@ const program = ShaderProgram.create(gl, phongVert, phongFrag);
 // --- Scene setup ---
 const scene = new Scene();
 
-// Create a box
-const boxGeo = Geometry.createBox(1, 1, 1);
-const boxMat = new Material(program, { color: [0.2, 0.6, 1.0, 1.0], specular: 0.5, shininess: 64 });
-const box = new Mesh(boxGeo, boxMat, 'box');
-box.transform.setPosition(0, 1.0, 0);
-scene.add(box);
+// --- Physics world ---
+const physicsWorld = new PhysicsWorld();
+physicsWorld.gravity = new Vector3(0, -9.81, 0);
+physicsWorld.iterations = 12;
 
-// Create a sphere
-const sphereGeo = Geometry.createSphere(0.4, 24, 16);
-const sphereMat = new Material(program, { color: [1.0, 0.3, 0.2, 1.0], specular: 0.8, shininess: 128 });
-const sphere = new Mesh(sphereGeo, sphereMat, 'sphere');
-sphere.transform.setPosition(2, 0.5, 0);
-scene.add(sphere);
-
-// Create a second box to cast/receive shadows
-const box2Geo = Geometry.createBox(0.6, 2, 0.6);
-const box2Mat = new Material(program, { color: [0.8, 0.8, 0.2, 1.0], specular: 0.3, shininess: 32 });
-const box2 = new Mesh(box2Geo, box2Mat, 'tall-box');
-box2.transform.setPosition(-3, 1, -1.5);
-scene.add(box2);
-
-// Create a ground plane
-const planeGeo = Geometry.createPlane(12, 12);
+// --- Ground plane (visual + physics) ---
+const planeGeo = Geometry.createPlane(20, 20);
 const planeMat = new Material(program, {
   color: [0.4, 0.7, 0.4, 1.0],
   cullFace: false,
   specular: 0.1,
   shininess: 8,
 });
-const plane = new Mesh(planeGeo, planeMat, 'ground');
-plane.transform.setPosition(0, 0, 0);
-scene.add(plane);
+const groundMesh = new Mesh(planeGeo, planeMat, 'ground');
+groundMesh.transform.setPosition(0, 0, 0);
+scene.add(groundMesh);
+
+const groundBody = new RigidBody(BodyType.STATIC);
+groundBody.position = new Vector3(0, 0, 0);
+groundBody.collider = new PlaneCollider(new Vector3(0, 1, 0), 0);
+groundBody.friction = 0.6;
+groundBody.restitution = 0.2;
+groundBody.sceneNode = groundMesh;
+physicsWorld.addBody(groundBody);
+
+// --- Helper to create physics box ---
+const boxColors: [number, number, number, number][] = [
+  [0.2, 0.6, 1.0, 1.0],
+  [1.0, 0.3, 0.2, 1.0],
+  [0.8, 0.8, 0.2, 1.0],
+  [0.3, 0.9, 0.5, 1.0],
+  [0.9, 0.4, 0.8, 1.0],
+  [1.0, 0.6, 0.1, 1.0],
+];
+
+function createPhysicsBox(
+  name: string,
+  halfW: number, halfH: number, halfD: number,
+  x: number, y: number, z: number,
+  mass: number,
+  colorIdx: number,
+): { mesh: Mesh; body: RigidBody } {
+  const geo = Geometry.createBox(halfW * 2, halfH * 2, halfD * 2);
+  const color = boxColors[colorIdx % boxColors.length];
+  const mat = new Material(program, { color, specular: 0.5, shininess: 64 });
+  const mesh = new Mesh(geo, mat, name);
+  scene.add(mesh);
+
+  const body = new RigidBody(BodyType.DYNAMIC);
+  body.position = new Vector3(x, y, z);
+  body.mass = mass;
+  body.collider = new BoxCollider(new Vector3(halfW, halfH, halfD));
+  body.computeInertia();
+  body.restitution = 0.2;
+  body.friction = 0.5;
+  body.sceneNode = mesh;
+  physicsWorld.addBody(body);
+
+  return { mesh, body };
+}
+
+function createPhysicsSphere(
+  name: string,
+  radius: number,
+  x: number, y: number, z: number,
+  mass: number,
+  colorIdx: number,
+): { mesh: Mesh; body: RigidBody } {
+  const geo = Geometry.createSphere(radius, 24, 16);
+  const color = boxColors[colorIdx % boxColors.length];
+  const mat = new Material(program, { color, specular: 0.8, shininess: 128 });
+  const mesh = new Mesh(geo, mat, name);
+  scene.add(mesh);
+
+  const body = new RigidBody(BodyType.DYNAMIC);
+  body.position = new Vector3(x, y, z);
+  body.mass = mass;
+  body.collider = new SphereCollider(radius);
+  body.computeInertia();
+  body.restitution = 0.4;
+  body.friction = 0.4;
+  body.sceneNode = mesh;
+  physicsWorld.addBody(body);
+
+  return { mesh, body };
+}
+
+// --- Stack of boxes (the classic physics demo) ---
+// Bottom row: 3 boxes
+createPhysicsBox('box-0-0', 0.5, 0.5, 0.5, -1.1, 0.5, 0, 2, 0);
+createPhysicsBox('box-0-1', 0.5, 0.5, 0.5,  0.0, 0.5, 0, 2, 1);
+createPhysicsBox('box-0-2', 0.5, 0.5, 0.5,  1.1, 0.5, 0, 2, 2);
+
+// Second row: 2 boxes
+createPhysicsBox('box-1-0', 0.5, 0.5, 0.5, -0.55, 1.5, 0, 2, 3);
+createPhysicsBox('box-1-1', 0.5, 0.5, 0.5,  0.55, 1.5, 0, 2, 4);
+
+// Top: 1 box
+createPhysicsBox('box-2-0', 0.5, 0.5, 0.5, 0, 2.5, 0, 2, 5);
+
+// A sphere dropping from height
+createPhysicsSphere('sphere-drop', 0.3, 0, 5, 0, 1.5, 1);
+
+// Some extra boxes off to the side, dropped at angle
+createPhysicsBox('box-side-1', 0.4, 0.4, 0.4, 3, 3, 0, 1.5, 0);
+createPhysicsBox('box-side-2', 0.3, 0.3, 0.3, 3.1, 5, 0.1, 1, 2);
 
 // --- Lights ---
 const sunDir = new Vector3(-0.5, -1, -0.3);
 const sun = new DirectionalLight(sunDir, [1.0, 0.95, 0.85], 1.2);
 sun.castShadow = true;
-sun.shadowOrthoSize = 8;
-sun.shadowFar = 30;
+sun.shadowOrthoSize = 12;
+sun.shadowFar = 40;
 scene.add(sun);
 
-const pointLight = new PointLight([0.3, 0.5, 1.0], 1.5, 8);
-pointLight.transform.setPosition(2, 2, 2);
+const pointLight = new PointLight([0.3, 0.5, 1.0], 1.5, 12);
+pointLight.transform.setPosition(3, 4, 3);
 scene.add(pointLight);
 
 // --- Shadow map ---
@@ -83,8 +162,8 @@ scene.add(camera);
 
 const controller = new CameraController(camera, engine.canvas, {
   mode: CameraMode.ORBIT,
-  target: new Vector3(0, 0.5, 0),
-  distance: 8,
+  target: new Vector3(0, 1.5, 0),
+  distance: 10,
   damping: 0.08,
 });
 
@@ -155,16 +234,15 @@ function setLightUniforms(shader: ShaderProgram, lights: Light[]): void {
   }
 }
 
-let time = 0;
+// --- Physics update on fixed timestep ---
+engine.on('fixedUpdate', (fixedDt: number) => {
+  physicsWorld.step(fixedDt);
+});
 
 engine.on('render', () => {
-  time += engine.clock.getDelta();
-
-  // Rotate the box
-  box.transform.setRotationFromEuler(time * 30, time * 45, 0);
-
-  // Orbit the sphere around the box
-  sphere.transform.setPosition(Math.cos(time) * 2, 0.5, Math.sin(time) * 2);
+  // Interpolate physics bodies for smooth rendering
+  const alpha = engine.clock.accumulator / engine.clock.fixedDeltaTime;
+  physicsWorld.syncToScene(alpha);
 
   // Update camera controller
   controller.update(engine.clock.getDelta());
