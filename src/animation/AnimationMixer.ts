@@ -157,11 +157,14 @@ export class AnimationMixer {
       this.fade.from.weight = 1 - alpha;
       this.fade.to.weight   = alpha;
       if (alpha >= 1) {
-        // Fade complete — zero out the old action (keep it registered so it
-        // can be the target of a future crossFadeTo in the opposite direction)
+        // Fade complete — stop the old action cleanly
         this.fade.from.weight = 0;
         this.fade.from.pause();
         this.fade.to.weight = 1;
+        // Remove the finished source from the actions list to avoid ghost accumulation,
+        // but keep it reachable externally so callers can crossFadeTo it later (re-added by crossFadeTo).
+        const fromIdx = this.actions.indexOf(this.fade.from);
+        if (fromIdx !== -1) this.actions.splice(fromIdx, 1);
         this.fade = null;
       }
     }

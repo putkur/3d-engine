@@ -2,7 +2,7 @@
  * Interpolation modes supported by an AnimationTrack.
  * Matches glTF 2.0 animation sampler interpolation values.
  */
-export const enum Interpolation {
+export enum Interpolation {
   STEP = 'STEP',
   LINEAR = 'LINEAR',
   CUBICSPLINE = 'CUBICSPLINE',
@@ -121,14 +121,12 @@ export class AnimationTrack {
     const c = this.components;
     const a = this.getKeyframe(lo);
     const b = this.getKeyframe(hi);
-    const out: number[] = new Array(c);
 
     if (this.targetPath === 'rotation') {
-      // Quaternion slerp
-      out[0] = this.slerpComponent(a, b, alpha, c);
       return this.slerpQuat(a, b, alpha);
     }
 
+    const out: number[] = new Array(c);
     for (let i = 0; i < c; i++) {
       out[i] = a[i] + (b[i] - a[i]) * alpha;
     }
@@ -166,11 +164,6 @@ export class AnimationTrack {
       s0 * az + s1 * bz,
       s0 * aw + s1 * bw,
     ];
-  }
-
-  // Needed to satisfy return type — not actually used (slerpQuat handles it)
-  private slerpComponent(_a: number[], _b: number[], _t: number, _c: number): number {
-    return 0;
   }
 
   private interpolateCubic(lo: number, hi: number, t: number, dt: number): number[] {

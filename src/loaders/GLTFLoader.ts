@@ -315,8 +315,21 @@ export class GLTFLoader {
   // ---------------------------------------------------------------
 
   private getAccessorData(json: GLTFJson, accessorIdx: number, buffers: ArrayBuffer[]): ArrayBufferView {
-    const accessor = json.accessors![accessorIdx];
-    const bufferView = json.bufferViews![accessor.bufferView ?? 0];
+    const accessors = json.accessors;
+    if (!accessors || accessorIdx < 0 || accessorIdx >= accessors.length) {
+      throw new Error(`Invalid accessor index: ${accessorIdx}`);
+    }
+    const accessor = accessors[accessorIdx];
+    const bufferViews = json.bufferViews;
+    if (!bufferViews) throw new Error('glTF has no bufferViews');
+    const bvIdx = accessor.bufferView ?? 0;
+    if (bvIdx < 0 || bvIdx >= bufferViews.length) {
+      throw new Error(`Invalid bufferView index: ${bvIdx}`);
+    }
+    const bufferView = bufferViews[bvIdx];
+    if (bufferView.buffer < 0 || bufferView.buffer >= buffers.length) {
+      throw new Error(`Invalid buffer index: ${bufferView.buffer}`);
+    }
     const buffer = buffers[bufferView.buffer];
 
     const byteOffset = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
@@ -777,6 +790,7 @@ export class GLTFLoader {
         if (channel.sampler < 0 || channel.sampler >= animDef.samplers.length) continue;
         const samplerDef = animDef.samplers[channel.sampler];
         const targetNodeIdx = channel.target.node;
+        if (targetNodeIdx < 0 || targetNodeIdx >= allNodes.length) continue;
         const targetNode = allNodes[targetNodeIdx];
         if (!targetNode) continue;
 

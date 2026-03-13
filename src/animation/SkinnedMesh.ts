@@ -114,4 +114,20 @@ export class SkinnedMesh extends Mesh {
     super.markGPUDirty();
     this.skinnedVAODirty = true;
   }
+
+  /** Release all skinning-specific GPU resources. */
+  destroySkinResources(): void {
+    this.jointsVBO?.destroy();
+    this.weightsVBO?.destroy();
+    this.skinnedVAO?.destroy();
+    this.jointsVBO = null;
+    this.weightsVBO = null;
+    this.skinnedVAO = null;
+    this.skinnedVAODirty = true;
+  }
+
+  override destroyGPUResources(): void {
+    this.destroySkinResources();
+    super.destroyGPUResources();
+  }
 }
