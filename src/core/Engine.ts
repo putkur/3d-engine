@@ -1,10 +1,12 @@
 import { Clock } from './Clock';
 import { EventEmitter } from './EventEmitter';
+import { InputManager } from '../input/InputManager';
 
 export class Engine extends EventEmitter {
   public readonly canvas: HTMLCanvasElement;
   public readonly gl: WebGL2RenderingContext;
   public readonly clock: Clock;
+  public readonly input: InputManager;
 
   private animationFrameId: number = 0;
   private running: boolean = false;
@@ -39,6 +41,7 @@ export class Engine extends EventEmitter {
     this.gl = gl;
 
     this.clock = new Clock();
+    this.input = new InputManager(this.canvas);
   }
 
   init(): void {
@@ -79,6 +82,9 @@ export class Engine extends EventEmitter {
     this.animationFrameId = requestAnimationFrame(this.loop);
 
     const dt = this.clock.tick();
+
+    // Poll input at start of frame
+    this.input.poll();
 
     // Fixed timestep physics updates (placeholder for Phase 7)
     while (this.clock.accumulator >= this.clock.fixedDeltaTime) {
@@ -146,6 +152,7 @@ export class Engine extends EventEmitter {
 
   destroy(): void {
     this.stop();
+    this.input.dispose();
     window.removeEventListener('resize', this.onResize);
     if (this.statsEl && this.statsEl.parentNode) {
       this.statsEl.parentNode.removeChild(this.statsEl);

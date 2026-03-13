@@ -160,12 +160,51 @@ const aspect = engine.canvas.width / engine.canvas.height;
 const camera = new PerspectiveCamera(60, aspect, 0.1, 100);
 scene.add(camera);
 
-const controller = new CameraController(camera, engine.canvas, {
-  mode: CameraMode.ORBIT,
-  target: new Vector3(0, 1.5, 0),
-  distance: 10,
-  damping: 0.08,
+camera.transform.setPosition(0, 2, 8);
+const controller = new CameraController(camera, engine.input, {
+  mode: CameraMode.FIRST_PERSON,
+  moveSpeed: 5,
+  lookSensitivity: 0.1,
+  damping: 0.05,
 });
+
+// Click canvas to lock pointer for mouse look
+engine.canvas.addEventListener('click', () => {
+  controller.requestPointerLock();
+});
+
+// --- Settings UI ---
+const panel = document.createElement('div');
+panel.style.cssText =
+  'position:fixed;top:8px;right:8px;background:rgba(0,0,0,0.7);color:#fff;' +
+  'padding:12px;border-radius:6px;font:13px monospace;z-index:1000;display:flex;flex-direction:column;gap:8px;';
+
+function addSlider(label: string, min: number, max: number, step: number, value: number, onChange: (v: number) => void) {
+  const row = document.createElement('label');
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;';
+  const span = document.createElement('span');
+  span.style.minWidth = '110px';
+  span.textContent = `${label}: ${value}`;
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = String(value);
+  input.style.width = '120px';
+  input.addEventListener('input', () => {
+    const v = parseFloat(input.value);
+    span.textContent = `${label}: ${v}`;
+    onChange(v);
+  });
+  row.appendChild(span);
+  row.appendChild(input);
+  panel.appendChild(row);
+}
+
+addSlider('FOV', 30, 120, 1, camera.fov, (v) => { camera.fov = v; });
+addSlider('Sensitivity', 0.05, 1, 0.05, controller.lookSensitivity, (v) => { controller.lookSensitivity = v; });
+document.body.appendChild(panel);
 
 // Handle resize
 engine.on('resize', () => {

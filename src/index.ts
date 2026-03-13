@@ -70,3 +70,10 @@ export { OBJLoader } from './loaders/OBJLoader';
 export { GLTFLoader } from './loaders/GLTFLoader';
 export { AssetManager } from './loaders/AssetManager';
 export type { Asset, ProgressCallback } from './loaders/AssetManager';
+
+// Input
+export { Keyboard } from './input/Keyboard';
+export { Mouse } from './input/Mouse';
+export { GamepadInput, GamepadButton, GamepadAxis } from './input/Gamepad';
+export { InputManager } from './input/InputManager';
+export type { ActionBinding } from './input/InputManager';

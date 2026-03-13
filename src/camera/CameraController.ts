@@ -2,6 +2,7 @@ import { Camera } from './Camera';
 import { Vector3 } from '../math/Vector3';
 import { Quaternion } from '../math/Quaternion';
 import { clamp, degToRad } from '../math/MathUtils';
+import { InputManager } from '../input/InputManager';
 
 export enum CameraMode {
   ORBIT = 'orbit',
@@ -35,7 +36,8 @@ export interface CameraControllerOptions {
 
 /**
  * Interactive camera controller supporting orbit, fly, and first-person modes.
- * Attach to a Camera and call `update(dt)` each frame.
+ * Reads input from an InputManager instance (keyboard + mouse + gamepad).
+ * Attach to a Camera and call `update(dt)` each frame after `inputManager.poll()`.
  */
 export class CameraController {
   public camera: Camera;
@@ -66,20 +68,12 @@ export class CameraController {
   private _panSensitivity: number;
   private _damping: number;
 
-  // Input state
-  private _keys = new Set<string>();
-  private _mouseDown = new Set<number>();
-  private _mouseDeltaX = 0;
-  private _mouseDeltaY = 0;
-  private _scrollDelta = 0;
-  private _pointerLocked = false;
+  // Input
+  private _input: InputManager;
 
-  private _canvas: HTMLCanvasElement;
-  private _disposed = false;
-
-  constructor(camera: Camera, canvas: HTMLCanvasElement, options?: CameraControllerOptions) {
+  constructor(camera: Camera, input: InputManager, options?: CameraControllerOptions) {
     this.camera = camera;
-    this._canvas = canvas;
+    this._input = input;
 
     const opts = options ?? {};
     this.mode = opts.mode ?? CameraMode.ORBIT;
@@ -100,8 +94,6 @@ export class CameraController {
     this._currentTarget.copy(this._target);
     this._currentYaw = this._yaw;
     this._currentPitch = this._pitch;
-
-    this.bindEvents();
   }
 
   // ---------------------------------------------------------------
@@ -123,8 +115,12 @@ export class CameraController {
   get moveSpeed(): number { return this._moveSpeed; }
   set moveSpeed(v: number) { this._moveSpeed = v; }
 
+  get lookSensitivity(): number { return this._lookSensitivity; }
+  set lookSensitivity(v: number) { this._lookSensitivity = v; }
+
   /**
    * Call every frame with deltaTime to update camera position/rotation.
+   * Must be called after `inputManager.poll()`.
    */
   update(dt: number): void {
     switch (this.mode) {
@@ -138,26 +134,20 @@ export class CameraController {
         this.updateFirstPerson(dt);
         break;
     }
-
-    // Reset per-frame deltas
-    this._mouseDeltaX = 0;
-    this._mouseDeltaY = 0;
-    this._scrollDelta = 0;
   }
 
   /** Request pointer lock for fly/first-person modes. */
   requestPointerLock(): void {
-    this._canvas.requestPointerLock();
+    this._input.mouse.requestPointerLock();
   }
 
   /** Exit pointer lock. */
   exitPointerLock(): void {
-    document.exitPointerLock();
+    this._input.mouse.exitPointerLock();
   }
 
   dispose(): void {
-    this._disposed = true;
-    this.unbindEvents();
+    // No-op — input lifecycle is owned by InputManager
   }
 
   // ---------------------------------------------------------------
@@ -165,28 +155,30 @@ export class CameraController {
   // ---------------------------------------------------------------
 
   private updateOrbit(dt: number): void {
+    const mouse = this._input.mouse;
+
     // Left-click drag → rotate
-    if (this._mouseDown.has(0)) {
-      this._yaw -= this._mouseDeltaX * this._lookSensitivity;
-      this._pitch += this._mouseDeltaY * this._lookSensitivity;
+    if (mouse.isDown(0)) {
+      this._yaw -= mouse.deltaX * this._lookSensitivity;
+      this._pitch -= mouse.deltaY * this._lookSensitivity;
       this._pitch = clamp(this._pitch, this._minPitch, this._maxPitch);
     }
 
     // Middle-click drag → pan
-    if (this._mouseDown.has(1)) {
+    if (mouse.isDown(1)) {
       const right = this.camera.transform.getRight();
       const up = this.camera.transform.getUp();
 
-      const panX = -this._mouseDeltaX * this._panSensitivity * this._distance;
-      const panY = this._mouseDeltaY * this._panSensitivity * this._distance;
+      const panX = -mouse.deltaX * this._panSensitivity * this._distance;
+      const panY = mouse.deltaY * this._panSensitivity * this._distance;
 
       this._target.addSelf(right.scale(panX));
       this._target.addSelf(up.scale(panY));
     }
 
     // Scroll → zoom
-    if (this._scrollDelta !== 0) {
-      this._distance -= this._scrollDelta * this._zoomSensitivity;
+    if (mouse.scrollY !== 0) {
+      this._distance -= mouse.scrollY * this._zoomSensitivity;
       this._distance = clamp(this._distance, this._minDistance, this._maxDistance);
     }
 
@@ -217,36 +209,34 @@ export class CameraController {
   // ---------------------------------------------------------------
 
   private updateFly(dt: number): void {
+    const mouse = this._input.mouse;
+    const kb = this._input.keyboard;
+
     // Mouse look (any button or pointer locked)
-    if (this._mouseDown.has(0) || this._pointerLocked) {
-      this._yaw -= this._mouseDeltaX * this._lookSensitivity;
-      this._pitch += this._mouseDeltaY * this._lookSensitivity;
+    if (mouse.isDown(0) || mouse.locked) {
+      this._yaw -= mouse.deltaX * this._lookSensitivity;
+      this._pitch -= mouse.deltaY * this._lookSensitivity;
       this._pitch = clamp(this._pitch, this._minPitch, this._maxPitch);
     }
 
     // Movement
-    const speed = this._moveSpeed * (this._keys.has('ShiftLeft') || this._keys.has('ShiftRight') ? 3 : 1) * dt;
+    const speed = this._moveSpeed * (kb.isDown('ShiftLeft') || kb.isDown('ShiftRight') ? 3 : 1) * dt;
     const forward = this.camera.transform.getForward().normalizeSelf();
     const right = this.camera.transform.getRight().normalizeSelf();
     const worldUp = Vector3.up();
 
     const move = Vector3.zero();
 
-    if (this._keys.has('KeyW') || this._keys.has('ArrowUp')) move.addSelf(forward.scale(speed));
-    if (this._keys.has('KeyS') || this._keys.has('ArrowDown')) move.addSelf(forward.scale(-speed));
-    if (this._keys.has('KeyA') || this._keys.has('ArrowLeft')) move.addSelf(right.scale(-speed));
-    if (this._keys.has('KeyD') || this._keys.has('ArrowRight')) move.addSelf(right.scale(speed));
-    if (this._keys.has('KeyE') || this._keys.has('Space')) move.addSelf(worldUp.scale(speed));
-    if (this._keys.has('KeyQ') || this._keys.has('ControlLeft')) move.addSelf(worldUp.scale(-speed));
+    if (kb.isDown('KeyW') || kb.isDown('ArrowUp')) move.addSelf(forward.scale(speed));
+    if (kb.isDown('KeyS') || kb.isDown('ArrowDown')) move.addSelf(forward.scale(-speed));
+    if (kb.isDown('KeyA') || kb.isDown('ArrowLeft')) move.addSelf(right.scale(-speed));
+    if (kb.isDown('KeyD') || kb.isDown('ArrowRight')) move.addSelf(right.scale(speed));
+    if (kb.isDown('KeyE') || kb.isDown('Space')) move.addSelf(worldUp.scale(speed));
+    if (kb.isDown('KeyQ') || kb.isDown('ControlLeft')) move.addSelf(worldUp.scale(-speed));
 
     const pos = this.camera.transform.position;
     pos.addSelf(move);
     this.camera.transform.markDirty();
-
-    // Smooth rotation
-    const t = 1 - Math.pow(this._damping, dt);
-    this._currentYaw = lerpAngle(this._currentYaw, this._yaw, t);
-    this._currentPitch = lerpAngle(this._currentPitch, this._pitch, t);
 
     this.applyEulerRotation();
   }
@@ -256,15 +246,18 @@ export class CameraController {
   // ---------------------------------------------------------------
 
   private updateFirstPerson(dt: number): void {
+    const mouse = this._input.mouse;
+    const kb = this._input.keyboard;
+
     // Mouse look (pointer lock expected)
-    if (this._pointerLocked) {
-      this._yaw -= this._mouseDeltaX * this._lookSensitivity;
-      this._pitch += this._mouseDeltaY * this._lookSensitivity;
+    if (mouse.locked) {
+      this._yaw -= mouse.deltaX * this._lookSensitivity;
+      this._pitch -= mouse.deltaY * this._lookSensitivity;
       this._pitch = clamp(this._pitch, this._minPitch, this._maxPitch);
     }
 
     // Ground-locked movement (move on XZ plane, ignore camera pitch for movement)
-    const speed = this._moveSpeed * (this._keys.has('ShiftLeft') || this._keys.has('ShiftRight') ? 3 : 1) * dt;
+    const speed = this._moveSpeed * (kb.isDown('ShiftLeft') || kb.isDown('ShiftRight') ? 3 : 1) * dt;
     const yawRad = degToRad(this._yaw);
     const forwardXZ = new Vector3(-Math.sin(yawRad), 0, -Math.cos(yawRad));
     const rightXZ = new Vector3(Math.cos(yawRad), 0, -Math.sin(yawRad));
@@ -272,21 +265,16 @@ export class CameraController {
 
     const move = Vector3.zero();
 
-    if (this._keys.has('KeyW') || this._keys.has('ArrowUp')) move.addSelf(forwardXZ.scale(speed));
-    if (this._keys.has('KeyS') || this._keys.has('ArrowDown')) move.addSelf(forwardXZ.scale(-speed));
-    if (this._keys.has('KeyA') || this._keys.has('ArrowLeft')) move.addSelf(rightXZ.scale(-speed));
-    if (this._keys.has('KeyD') || this._keys.has('ArrowRight')) move.addSelf(rightXZ.scale(speed));
-    if (this._keys.has('Space')) move.addSelf(worldUp.scale(speed));
-    if (this._keys.has('ControlLeft')) move.addSelf(worldUp.scale(-speed));
+    if (kb.isDown('KeyW') || kb.isDown('ArrowUp')) move.addSelf(forwardXZ.scale(speed));
+    if (kb.isDown('KeyS') || kb.isDown('ArrowDown')) move.addSelf(forwardXZ.scale(-speed));
+    if (kb.isDown('KeyA') || kb.isDown('ArrowLeft')) move.addSelf(rightXZ.scale(-speed));
+    if (kb.isDown('KeyD') || kb.isDown('ArrowRight')) move.addSelf(rightXZ.scale(speed));
+    if (kb.isDown('Space')) move.addSelf(worldUp.scale(speed));
+    if (kb.isDown('ControlLeft')) move.addSelf(worldUp.scale(-speed));
 
     const pos = this.camera.transform.position;
     pos.addSelf(move);
     this.camera.transform.markDirty();
-
-    // Smooth rotation
-    const t = 1 - Math.pow(this._damping, dt);
-    this._currentYaw = lerpAngle(this._currentYaw, this._yaw, t);
-    this._currentPitch = lerpAngle(this._currentPitch, this._pitch, t);
 
     this.applyEulerRotation();
   }
@@ -310,75 +298,9 @@ export class CameraController {
    * Apply yaw/pitch euler angles directly to the camera transform quaternion.
    */
   private applyEulerRotation(): void {
-    this.camera.transform.rotation = Quaternion.fromEuler(this._currentPitch, this._currentYaw, 0);
+    this.camera.transform.rotation = Quaternion.fromEuler(this._pitch, this._yaw, 0);
   }
 
-  // ---------------------------------------------------------------
-  // Event binding
-  // ---------------------------------------------------------------
-
-  // Store bound handlers for removal
-  private _onKeyDown = (e: KeyboardEvent): void => {
-    if (this._disposed) return;
-    this._keys.add(e.code);
-  };
-
-  private _onKeyUp = (e: KeyboardEvent): void => {
-    if (this._disposed) return;
-    this._keys.delete(e.code);
-  };
-
-  private _onMouseDown = (e: MouseEvent): void => {
-    if (this._disposed) return;
-    this._mouseDown.add(e.button);
-  };
-
-  private _onMouseUp = (e: MouseEvent): void => {
-    if (this._disposed) return;
-    this._mouseDown.delete(e.button);
-  };
-
-  private _onMouseMove = (e: MouseEvent): void => {
-    if (this._disposed) return;
-    this._mouseDeltaX += e.movementX;
-    this._mouseDeltaY += e.movementY;
-  };
-
-  private _onWheel = (e: WheelEvent): void => {
-    if (this._disposed) return;
-    e.preventDefault();
-    this._scrollDelta += e.deltaY > 0 ? -1 : e.deltaY < 0 ? 1 : 0;
-  };
-
-  private _onPointerLockChange = (): void => {
-    this._pointerLocked = document.pointerLockElement === this._canvas;
-  };
-
-  private _onContextMenu = (e: Event): void => {
-    e.preventDefault();
-  };
-
-  private bindEvents(): void {
-    window.addEventListener('keydown', this._onKeyDown);
-    window.addEventListener('keyup', this._onKeyUp);
-    this._canvas.addEventListener('mousedown', this._onMouseDown);
-    window.addEventListener('mouseup', this._onMouseUp);
-    window.addEventListener('mousemove', this._onMouseMove);
-    this._canvas.addEventListener('wheel', this._onWheel, { passive: false });
-    document.addEventListener('pointerlockchange', this._onPointerLockChange);
-    this._canvas.addEventListener('contextmenu', this._onContextMenu);
-  }
-
-  private unbindEvents(): void {
-    window.removeEventListener('keydown', this._onKeyDown);
-    window.removeEventListener('keyup', this._onKeyUp);
-    this._canvas.removeEventListener('mousedown', this._onMouseDown);
-    window.removeEventListener('mouseup', this._onMouseUp);
-    window.removeEventListener('mousemove', this._onMouseMove);
-    this._canvas.removeEventListener('wheel', this._onWheel);
-    document.removeEventListener('pointerlockchange', this._onPointerLockChange);
-    this._canvas.removeEventListener('contextmenu', this._onContextMenu);
-  }
 }
 
 // ---------------------------------------------------------------
