@@ -291,8 +291,9 @@ export class CameraController {
       vel.x = wish.x * speed;
       vel.z = wish.z * speed;
 
-      // Jump (only when approximately grounded — vertical velocity near zero)
-      if (kb.isDown('Space') && Math.abs(vel.y) < 0.5) {
+      // Jump: use wasPressed so it triggers once per key press, not every frame.
+      // Grounded check: vertical velocity must be near zero.
+      if (kb.wasPressed('Space') && Math.abs(vel.y) < 0.5) {
         vel.y = this._jumpSpeed;
       }
 

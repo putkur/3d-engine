@@ -104,6 +104,54 @@ export class Mesh extends SceneNode {
     return this.vao;
   }
 
+  /**
+   * World-space bounding sphere for this mesh.
+   * Used by Frustum and BVH for visibility tests.
+   * The sphere is centred on the mesh's world-space origin and scaled by the
+   * largest uniform scale factor extracted from the world matrix.
+   */
+  getWorldBoundingSphere(): { cx: number; cy: number; cz: number; radius: number } {
+    this.geometry.computeBounds();
+    const d = this.transform.worldMatrix.data;
+    const cx = d[12], cy = d[13], cz = d[14];
+    const sx = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    const sy = Math.sqrt(d[4] * d[4] + d[5] * d[5] + d[6] * d[6]);
+    const sz = Math.sqrt(d[8] * d[8] + d[9] * d[9] + d[10] * d[10]);
+    const maxScale = Math.max(sx, sy, sz);
+    return { cx, cy, cz, radius: this.geometry.boundingSphereRadius * maxScale };
+  }
+
+  /**
+   * World-space AABB for BVH construction and refitting.
+   * Transforms all 8 corners of the local AABB by the world matrix and
+   * returns the enclosing axis-aligned box.
+   */
+  getWorldBVHBounds(): { minX: number; minY: number; minZ: number; maxX: number; maxY: number; maxZ: number } {
+    this.geometry.computeBounds();
+    const d  = this.transform.worldMatrix.data;
+    const lx0 = this.geometry.localMinX, lx1 = this.geometry.localMaxX;
+    const ly0 = this.geometry.localMinY, ly1 = this.geometry.localMaxY;
+    const lz0 = this.geometry.localMinZ, lz1 = this.geometry.localMaxZ;
+    let minX =  Infinity, minY =  Infinity, minZ =  Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let xi = 0; xi < 2; xi++) {
+      for (let yi = 0; yi < 2; yi++) {
+        for (let zi = 0; zi < 2; zi++) {
+          const lx = xi === 0 ? lx0 : lx1;
+          const ly = yi === 0 ? ly0 : ly1;
+          const lz = zi === 0 ? lz0 : lz1;
+          const wx = d[0] * lx + d[4] * ly + d[8]  * lz + d[12];
+          const wy = d[1] * lx + d[5] * ly + d[9]  * lz + d[13];
+          const wz = d[2] * lx + d[6] * ly + d[10] * lz + d[14];
+          if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+          if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+          if (wz < minZ) minZ = wz; if (wz > maxZ) maxZ = wz;
+        }
+      }
+    }
+    return { minX, minY, minZ, maxX, maxY, maxZ };
+  }
+
   /** Release GPU resources. */
   destroyGPUResources(): void {
     if (this.vao) { this.vao.destroy(); this.vao = null; }

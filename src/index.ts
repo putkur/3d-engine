@@ -92,3 +92,13 @@ export type { ActionBinding } from './input/InputManager';
 export { Stats } from './debug/Stats';
 export { DebugRenderer } from './debug/DebugRenderer';
 export { Inspector } from './debug/Inspector';
+
+// Phase 12 — Optimization & Production
+export { Frustum } from './renderer/Frustum';
+export { RenderQueue } from './renderer/RenderQueue';
+export type { RenderItem } from './renderer/RenderQueue';
+export { BVH } from './scene/BVH';
+export type { BVHCuller, BVHBounds } from './scene/BVH';
+export { ObjectPool } from './utils/Pool';
+export { PhysicsWorkerHost } from './physics/PhysicsWorkerHost';
+export type { BodyAttachment, KinematicUpdate, SerializedBody, SerializedCollider } from './physics/PhysicsWorkerHost';

@@ -22,6 +22,12 @@ export class Geometry {
   public vertexCount: number;
   public indexCount: number;
 
+  // --- Bounding volume cache (populated lazily by computeBounds) ---
+  public boundingSphereRadius = 0;
+  public localMinX = 0; public localMinY = 0; public localMinZ = 0;
+  public localMaxX = 0; public localMaxY = 0; public localMaxZ = 0;
+  private _boundsComputed = false;
+
   constructor(data: GeometryData) {
     this.positions = data.positions;
     this.normals = data.normals;
@@ -31,6 +37,32 @@ export class Geometry {
 
     this.vertexCount = data.positions.length / 3;
     this.indexCount = data.indices.length;
+  }
+
+  /**
+   * Compute the bounding sphere radius (from local origin) and the
+   * axis-aligned bounding box in local space. Called lazily the first time
+   * world-space bounds are requested for culling or BVH construction.
+   * Results are cached; mark dirty by setting `_boundsComputed = false`.
+   */
+  computeBounds(): void {
+    if (this._boundsComputed) return;
+    const pos = this.positions;
+    let maxR2 = 0;
+    let minX =  Infinity, minY =  Infinity, minZ =  Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < pos.length; i += 3) {
+      const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+      const r2 = x * x + y * y + z * z;
+      if (r2 > maxR2) maxR2 = r2;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    this.boundingSphereRadius = Math.sqrt(maxR2);
+    this.localMinX = minX; this.localMinY = minY; this.localMinZ = minZ;
+    this.localMaxX = maxX; this.localMaxY = maxY; this.localMaxZ = maxZ;
+    this._boundsComputed = true;
   }
 
   /**

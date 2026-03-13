@@ -53,6 +53,14 @@ A fully-featured 3D engine built from scratch using **TypeScript** and **WebGL 2
 - **Inspector**: live scene tree browser with transform and material editing
 - Toggle with **F3** or the Debug Mode checkbox in the settings panel
 
+### Performance & Production (Phase 12)
+- **Frustum culling** (`Frustum.ts`) — extracts 6 clip-space planes from the view-projection matrix; sphere and AABB tests reject objects outside the view before any draw call is issued
+- **BVH** (`BVH.ts`) — top-down median-split Bounding Volume Hierarchy; `build` once, `refit` cheaply each frame for dynamic scenes, `query(frustum)` to collect only visible mesh indices in O(log N)
+- **Render queue** (`RenderQueue.ts`) — assigns stable shader/material sort keys and sorts draw calls to minimise WebGL state changes (shader switches and texture rebinds)
+- **Object pool** (`utils/Pool.ts`) — generic `ObjectPool<T>` with `acquire`/`release` and optional pre-warming; reduces GC pressure in hot paths
+- **Physics Web Worker** (`PhysicsWorker.ts` + `PhysicsWorkerHost.ts`) — the entire rigid-body simulation runs in a dedicated Worker thread; transforms and velocities are returned each step as a zero-copy transferable `Float32Array` so the main thread is never blocked
+- **Production bundle** — content-hash output filenames, vendor chunk splitting (gl-matrix isolated), runtime chunk separation, and per-mode `devtool` (`eval-source-map` in dev, `source-map` in production)
+
 ---
 
 ## Getting Started
@@ -117,14 +125,19 @@ src/
 ├── core/          — Engine lifecycle, clock, event bus
 ├── math/          — Vector2/3/4, Matrix4, Quaternion, MathUtils (gl-matrix wrappers)
 ├── renderer/      — WebGL 2 abstractions, shader programs, textures, framebuffers
-│   └── shaders/   — GLSL source files (phong, shadow, PBR, skybox, particles, post-process)
+│   ├── shaders/   — GLSL source files (phong, shadow, PBR, skybox, particles, post-process)
+│   ├── Frustum.ts — View frustum plane extraction and sphere/AABB culling tests
+│   └── RenderQueue.ts — Sorted draw call queue (minimises shader/material switches)
 ├── scene/         — Scene graph, Geometry, Material, Mesh, InstancedMesh, ParticleSystem
+│   └── BVH.ts     — Bounding Volume Hierarchy for accelerated frustum culling
 ├── camera/        — Camera types and camera controller
 ├── lighting/      — Directional, point, and spot lights; shadow map
-├── physics/       — Full rigid-body physics engine
+├── physics/       — Full rigid-body physics engine + Web Worker host/worker pair
 ├── loaders/       — OBJ, glTF, texture, and asset manager
 ├── input/         — Keyboard, mouse, gamepad, unified InputManager
 ├── debug/         — Stats, DebugRenderer, Inspector
+├── utils/
+│   └── Pool.ts    — Generic object pool for GC-pressure reduction
 └── demo.ts        — Interactive demo scene
 tests/             — Vitest unit tests for all math library modules
 ```
@@ -138,8 +151,8 @@ tests/             — Vitest unit tests for all math library modules
 | Language | TypeScript 5.x (strict mode) |
 | Math | gl-matrix 3.x |
 | Rendering | WebGL 2 (native) |
-| Physics | Custom rigid-body engine |
-| Build | Webpack 5 + ts-loader |
+| Physics | Custom rigid-body engine (Web Worker) |
+| Build | Webpack 5 + ts-loader (code-split, content-hash) |
 | Testing | Vitest |
 
 ---

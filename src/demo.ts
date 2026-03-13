@@ -28,6 +28,10 @@ import { Skybox } from './renderer/Skybox';
 import { CubeTexture } from './renderer/CubeTexture';
 import { InstancedMesh } from './scene/InstancedMesh';
 import { ParticleSystem } from './scene/ParticleSystem';
+import { Frustum } from './renderer/Frustum';
+import { RenderQueue } from './renderer/RenderQueue';
+import { BVH } from './scene/BVH';
+import { PhysicsWorkerHost } from './physics/PhysicsWorkerHost';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -259,6 +263,15 @@ engine.canvas.addEventListener('click', () => {
   controller.requestPointerLock();
 });
 
+// --- Phase 12: Frustum culling, BVH, Render queue ---
+const frustum      = new Frustum();
+const bvh          = new BVH();
+const renderQueue  = new RenderQueue();
+
+// Physics worker host — initialised after all bodies are created; starts engine when ready.
+let physicsHost: PhysicsWorkerHost | null = null;
+let cameraBodyIdx = -1;
+
 // --- Settings UI ---
 const panel = document.createElement('div');
 panel.style.cssText =
@@ -396,14 +409,14 @@ function setLightUniforms(shader: ShaderProgram, lights: Light[]): void {
   }
 }
 
-// --- Physics update on fixed timestep ---
+// --- Physics update on fixed timestep (runs in web worker) ---
 engine.on('fixedUpdate', (fixedDt: number) => {
-  const t0 = performance.now();
-  // Lock camera body rotation (no tumbling)
+  // Lock camera body rotation — zeroed state is pushed to worker via kinematicUpdates
   cameraBody.angularVelocity.set(0, 0, 0);
   cameraBody.rotation = Quaternion.identity();
-  physicsWorld.step(fixedDt);
-  stats.setPhysicsTime((performance.now() - t0) / 1000);
+  // Fire-and-forget: transforms are applied asynchronously when the worker responds.
+  physicsHost?.step(fixedDt, [cameraBodyIdx]);
+  stats.setPhysicsTime(physicsHost?.lastStepTime ?? 0);
 });
 
 // --- Per-frame stats & inspector ---
@@ -414,10 +427,6 @@ engine.on('update', (dt: number) => {
 });
 
 engine.on('render', () => {
-  // Interpolate physics bodies for smooth rendering
-  const alpha = engine.clock.accumulator / engine.clock.fixedDeltaTime;
-  physicsWorld.syncToScene(alpha);
-
   // Update camera controller
   controller.update(engine.clock.getDelta());
 
@@ -445,9 +454,23 @@ engine.on('render', () => {
   // Collect lights
   const lights = scene.lights.map(n => n as Light);
 
-  for (const node of scene.meshes) {
-    const mesh = node as Mesh;
-    if (!mesh.visible) continue;
+  // --- Frustum culling via BVH ---
+  frustum.fromViewProjection(camera.viewProjectionMatrix);
+  const meshNodes = scene.meshes as Mesh[];
+  const allBounds = meshNodes.map(m => m.getWorldBVHBounds());
+  bvh.refit(allBounds);
+  const visibleIdxs: number[] = [];
+  bvh.query(frustum, visibleIdxs);
+
+  // Build sorted render queue (minimises shader + material switches)
+  renderQueue.clear();
+  for (const idx of visibleIdxs) {
+    const m = meshNodes[idx];
+    if (m.visible) renderQueue.add(m);
+  }
+  renderQueue.sort();
+
+  for (const { mesh } of renderQueue.items) {
 
     const vao = mesh.ensureGPUBuffers(gl);
 
@@ -502,4 +525,20 @@ engine.on('render', () => {
   debugRenderer.render(camera, physicsWorld);
 });
 
-engine.start();
+// ---------------------------------------------------------------------------
+// Phase 12: Physics Web Worker — initialise and start
+// ---------------------------------------------------------------------------
+// Build attachment list from the physicsWorld body registry.
+// Order matches physicsWorld.bodies, so body indices are stable.
+const physicsAttachments = physicsWorld.bodies.map(b => ({ body: b, sceneNode: b.sceneNode }));
+cameraBodyIdx = physicsWorld.bodies.indexOf(cameraBody);
+
+physicsHost = new PhysicsWorkerHost();
+physicsHost.init(physicsAttachments, physicsWorld.gravity, physicsWorld.iterations).then(() => {
+  // Build the initial BVH once all world matrices are settled.
+  scene.updateMatrixWorld();
+  const initialBounds = (scene.meshes as Mesh[]).map(m => m.getWorldBVHBounds());
+  bvh.build(initialBounds);
+
+  engine.start();
+});
