@@ -21,7 +21,13 @@ export type { VertexAttribute } from './renderer/VertexArray';
 export { Texture, TextureWrap, TextureFilter } from './renderer/Texture';
 export type { TextureOptions } from './renderer/Texture';
 export { Framebuffer } from './renderer/Framebuffer';
-export { basicVert, basicFrag, standardVert, standardFrag, phongVert, phongFrag } from './renderer/shaders';
+export { basicVert, basicFrag, standardVert, standardFrag, phongVert, phongFrag,
+  shadowVert, shadowFrag, pbrVert, pbrFrag, skyboxVert, skyboxFrag,
+  instancedVert, instancedFrag, particleVert, particleFrag,
+  postprocessVert, postprocessFrag, bloomExtractFrag, blurFrag } from './renderer/shaders';
+export { PostProcessing } from './renderer/PostProcessing';
+export { CubeTexture } from './renderer/CubeTexture';
+export { Skybox } from './renderer/Skybox';
 
 // Scene
 export { Transform } from './scene/Transform';
@@ -32,6 +38,10 @@ export type { GeometryData } from './scene/Geometry';
 export { Material } from './scene/Material';
 export type { MaterialOptions } from './scene/Material';
 export { Mesh } from './scene/Mesh';
+export { PBRMaterial } from './scene/PBRMaterial';
+export { InstancedMesh } from './scene/InstancedMesh';
+export { ParticleSystem } from './scene/ParticleSystem';
+export type { ParticleSystemOptions } from './scene/ParticleSystem';
 
 // Camera
 export { Camera } from './camera/Camera';

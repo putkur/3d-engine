@@ -2,6 +2,7 @@ import { Engine } from './core/Engine';
 import { Renderer } from './renderer/Renderer';
 import { ShaderProgram } from './renderer/ShaderProgram';
 import { Vector3 } from './math/Vector3';
+import { Quaternion } from './math/Quaternion';
 import { Matrix4 } from './math/Matrix4';
 import { Scene } from './scene/Scene';
 import { Geometry } from './scene/Geometry';
@@ -22,6 +23,11 @@ import { PlaneCollider } from './physics/PlaneCollider';
 import { Stats } from './debug/Stats';
 import { DebugRenderer } from './debug/DebugRenderer';
 import { Inspector } from './debug/Inspector';
+import { PostProcessing } from './renderer/PostProcessing';
+import { Skybox } from './renderer/Skybox';
+import { CubeTexture } from './renderer/CubeTexture';
+import { InstancedMesh } from './scene/InstancedMesh';
+import { ParticleSystem } from './scene/ParticleSystem';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -158,6 +164,58 @@ scene.add(pointLight);
 // --- Shadow map ---
 const shadowMap = new ShadowMap(gl, 2048);
 
+// --- Post-processing ---
+const postProcess = new PostProcessing(gl, engine.canvas.width, engine.canvas.height, {
+  exposure: 1.0,
+  bloomThreshold: 0.8,
+  bloomStrength: 0.3,
+  vignetteStrength: 0.3,
+  saturation: 1.0,
+  enableFXAA: true,
+});
+
+// --- Skybox (solid color cubemap) ---
+const skyboxCube = CubeTexture.createSolid(gl, 0.1, 0.12, 0.2);
+const skybox = new Skybox(gl, skyboxCube);
+
+// --- Instanced mesh (field of small boxes) ---
+const instanceGeo = Geometry.createBox(0.3, 0.3, 0.3);
+const instancedMesh = new InstancedMesh(gl, instanceGeo, 100);
+instancedMesh.color = [0.55, 0.75, 0.45, 1];
+instancedMesh.lightDir = [-0.5, -1, -0.3];
+instancedMesh.lightColor = [1, 0.95, 0.85];
+instancedMesh.ambientColor = [0.15, 0.15, 0.18];
+const instanceMatrices: Matrix4[] = [];
+for (let row = 0; row < 10; row++) {
+  for (let col = 0; col < 10; col++) {
+    const m = Matrix4.translation(
+      -7 + col * 1.5,
+      0.15,
+      -10 - row * 1.5,
+    );
+    instanceMatrices.push(m);
+  }
+}
+instancedMesh.setInstances(instanceMatrices);
+
+// --- Particle system (fire fountain) ---
+const particles = new ParticleSystem(gl, {
+  maxParticles: 500,
+  emissionRate: 80,
+  lifetime: 1.8,
+  lifetimeVariance: 0.4,
+  speed: 3.5,
+  speedVariance: 0.8,
+  gravity: new Vector3(0, -1.5, 0),
+  startSize: 0.15,
+  endSize: 0.02,
+  startColor: [1, 0.6, 0.1, 1],
+  endColor: [1, 0.1, 0.0, 0],
+  emitterShape: 'point',
+});
+particles.position = new Vector3(-3, 0, -2);
+particles.direction = new Vector3(0, 1, 0);
+
 // --- Debug tools ---
 const stats = new Stats();
 stats.setRenderer(renderer);
@@ -169,15 +227,31 @@ inspector.attach(scene, debugRenderer);
 
 // --- Camera ---
 const aspect = engine.canvas.width / engine.canvas.height;
-const camera = new PerspectiveCamera(60, aspect, 0.1, 100);
+const camera = new PerspectiveCamera(90, aspect, 0.1, 100);
 scene.add(camera);
 
 camera.transform.setPosition(0, 2, 8);
+
+// --- Camera physics body ---
+const cameraBody = new RigidBody(BodyType.DYNAMIC);
+cameraBody.position = new Vector3(0, 2, 8);
+cameraBody.mass = 7;
+cameraBody.collider = new BoxCollider(new Vector3(0.3, 0.8, 0.3));
+cameraBody.computeInertia();
+cameraBody.restitution = 0.0;
+cameraBody.friction = 0.5;
+cameraBody.linearDamping = 0.05;
+cameraBody.angularDamping = 1.0; // prevent tumbling
+cameraBody.sceneNode = camera;
+physicsWorld.addBody(cameraBody);
+
 const controller = new CameraController(camera, engine.input, {
   mode: CameraMode.FIRST_PERSON,
   moveSpeed: 5,
   lookSensitivity: 0.1,
   damping: 0.05,
+  rigidBody: cameraBody,
+  jumpSpeed: 5,
 });
 
 // Click canvas to lock pointer for mouse look
@@ -216,19 +290,32 @@ function addSlider(label: string, min: number, max: number, step: number, value:
 
 addSlider('FOV', 30, 120, 1, camera.fov, (v) => { camera.fov = v; });
 addSlider('Sensitivity', 0.05, 1, 0.05, controller.lookSensitivity, (v) => { controller.lookSensitivity = v; });
+addSlider('Exposure', 0.1, 3, 0.1, postProcess.exposure, (v) => { postProcess.exposure = v; });
+addSlider('Bloom', 0, 1, 0.05, postProcess.bloomStrength, (v) => { postProcess.bloomStrength = v; });
+addSlider('Vignette', 0, 1, 0.05, postProcess.vignetteStrength, (v) => { postProcess.vignetteStrength = v; });
 
 // --- Debug mode toggle ---
-let debugMode = true;
+let debugMode = false;
 const debugRow = document.createElement('label');
 debugRow.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;';
 const debugCheckbox = document.createElement('input');
 debugCheckbox.type = 'checkbox';
 debugCheckbox.checked = debugMode;
-debugCheckbox.addEventListener('change', () => {
-  debugMode = debugCheckbox.checked;
-  stats.setVisible(debugMode);
-  debugRenderer.enabled = debugMode;
-  inspector.setVisible(debugMode);
+function setDebugMode(on: boolean) {
+  debugMode = on;
+  debugCheckbox.checked = on;
+  stats.setVisible(on);
+  debugRenderer.enabled = on;
+  inspector.setVisible(on);
+}
+debugCheckbox.addEventListener('change', () => setDebugMode(debugCheckbox.checked));
+
+// F3 keybinding to toggle debug mode
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'F3') {
+    e.preventDefault();
+    setDebugMode(!debugMode);
+  }
 });
 const debugLabel = document.createElement('span');
 debugLabel.textContent = 'Debug Mode';
@@ -238,9 +325,13 @@ panel.appendChild(debugRow);
 
 document.body.appendChild(panel);
 
+// Apply initial debug state
+setDebugMode(debugMode);
+
 // Handle resize
 engine.on('resize', () => {
   camera.aspect = engine.canvas.width / engine.canvas.height;
+  postProcess.resize(engine.canvas.width, engine.canvas.height);
 });
 
 /**
@@ -308,6 +399,9 @@ function setLightUniforms(shader: ShaderProgram, lights: Light[]): void {
 // --- Physics update on fixed timestep ---
 engine.on('fixedUpdate', (fixedDt: number) => {
   const t0 = performance.now();
+  // Lock camera body rotation (no tumbling)
+  cameraBody.angularVelocity.set(0, 0, 0);
+  cameraBody.rotation = Quaternion.identity();
   physicsWorld.step(fixedDt);
   stats.setPhysicsTime((performance.now() - t0) / 1000);
 });
@@ -316,6 +410,7 @@ engine.on('fixedUpdate', (fixedDt: number) => {
 engine.on('update', (dt: number) => {
   stats.update(dt);
   inspector.update(dt);
+  particles.update(dt);
 });
 
 engine.on('render', () => {
@@ -335,6 +430,9 @@ engine.on('render', () => {
 
   // --- Restore viewport to canvas size ---
   gl.viewport(0, 0, engine.canvas.width, engine.canvas.height);
+
+  // --- Begin post-processing ---
+  postProcess.begin();
 
   // --- Main render pass ---
   renderer.clear();
@@ -387,6 +485,18 @@ engine.on('render', () => {
 
     renderer.drawElements(vao);
   }
+
+  // --- Skybox ---
+  skybox.render(camera);
+
+  // --- Instanced mesh field ---
+  instancedMesh.render(camera);
+
+  // --- Particles ---
+  particles.render(camera);
+
+  // --- End post-processing ---
+  postProcess.end();
 
   // --- Debug overlay pass ---
   debugRenderer.render(camera, physicsWorld);

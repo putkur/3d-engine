@@ -3,6 +3,7 @@ import { Vector3 } from '../math/Vector3';
 import { Quaternion } from '../math/Quaternion';
 import { clamp, degToRad } from '../math/MathUtils';
 import { InputManager } from '../input/InputManager';
+import { RigidBody } from '../physics/RigidBody';
 
 export enum CameraMode {
   ORBIT = 'orbit',
@@ -32,6 +33,10 @@ export interface CameraControllerOptions {
   /** Min/max pitch in degrees. */
   minPitch?: number;
   maxPitch?: number;
+  /** Optional rigid body for physics-driven first-person movement. */
+  rigidBody?: RigidBody;
+  /** Jump impulse speed (units/s). Only used when rigidBody is set. */
+  jumpSpeed?: number;
 }
 
 /**
@@ -51,13 +56,13 @@ export class CameraController {
 
   // Spherical coords (orbit) / Euler angles (fly/FP)
   private _yaw = 0;    // degrees
-  private _pitch = 20;  // degrees (positive = above target)
+  private _pitch = 0;   // degrees (positive = above target)
   private _minPitch: number;
   private _maxPitch: number;
 
   // Smoothed values
   private _currentYaw = 0;
-  private _currentPitch = 20;
+  private _currentPitch = 0;
   private _currentDistance: number;
   private _currentTarget = Vector3.zero();
 
@@ -70,6 +75,10 @@ export class CameraController {
 
   // Input
   private _input: InputManager;
+
+  // Physics body (optional)
+  private _rigidBody: RigidBody | null = null;
+  private _jumpSpeed: number;
 
   constructor(camera: Camera, input: InputManager, options?: CameraControllerOptions) {
     this.camera = camera;
@@ -88,6 +97,8 @@ export class CameraController {
     this._damping = opts.damping ?? 0.1;
     this._minPitch = opts.minPitch ?? -89;
     this._maxPitch = opts.maxPitch ?? 89;
+    this._rigidBody = opts.rigidBody ?? null;
+    this._jumpSpeed = opts.jumpSpeed ?? 5;
 
     // Sync smoothed values
     this._currentDistance = this._distance;
@@ -117,6 +128,9 @@ export class CameraController {
 
   get lookSensitivity(): number { return this._lookSensitivity; }
   set lookSensitivity(v: number) { this._lookSensitivity = v; }
+
+  get rigidBody(): RigidBody | null { return this._rigidBody; }
+  set rigidBody(rb: RigidBody | null) { this._rigidBody = rb; }
 
   /**
    * Call every frame with deltaTime to update camera position/rotation.
@@ -256,25 +270,52 @@ export class CameraController {
       this._pitch = clamp(this._pitch, this._minPitch, this._maxPitch);
     }
 
-    // Ground-locked movement (move on XZ plane, ignore camera pitch for movement)
-    const speed = this._moveSpeed * (kb.isDown('ShiftLeft') || kb.isDown('ShiftRight') ? 3 : 1) * dt;
+    // Direction vectors on XZ plane
     const yawRad = degToRad(this._yaw);
     const forwardXZ = new Vector3(-Math.sin(yawRad), 0, -Math.cos(yawRad));
     const rightXZ = new Vector3(Math.cos(yawRad), 0, -Math.sin(yawRad));
-    const worldUp = Vector3.up();
 
-    const move = Vector3.zero();
+    if (this._rigidBody) {
+      // Physics-driven movement: set horizontal velocity, preserve vertical
+      const speed = this._moveSpeed * (kb.isDown('ShiftLeft') || kb.isDown('ShiftRight') ? 3 : 1);
+      const wish = Vector3.zero();
 
-    if (kb.isDown('KeyW') || kb.isDown('ArrowUp')) move.addSelf(forwardXZ.scale(speed));
-    if (kb.isDown('KeyS') || kb.isDown('ArrowDown')) move.addSelf(forwardXZ.scale(-speed));
-    if (kb.isDown('KeyA') || kb.isDown('ArrowLeft')) move.addSelf(rightXZ.scale(-speed));
-    if (kb.isDown('KeyD') || kb.isDown('ArrowRight')) move.addSelf(rightXZ.scale(speed));
-    if (kb.isDown('Space')) move.addSelf(worldUp.scale(speed));
-    if (kb.isDown('ControlLeft')) move.addSelf(worldUp.scale(-speed));
+      if (kb.isDown('KeyW') || kb.isDown('ArrowUp')) wish.addSelf(forwardXZ);
+      if (kb.isDown('KeyS') || kb.isDown('ArrowDown')) wish.addSelf(forwardXZ.scale(-1));
+      if (kb.isDown('KeyA') || kb.isDown('ArrowLeft')) wish.addSelf(rightXZ.scale(-1));
+      if (kb.isDown('KeyD') || kb.isDown('ArrowRight')) wish.addSelf(rightXZ);
 
-    const pos = this.camera.transform.position;
-    pos.addSelf(move);
-    this.camera.transform.markDirty();
+      if (wish.lengthSquared() > 1e-6) wish.normalizeSelf();
+
+      const vel = this._rigidBody.linearVelocity;
+      vel.x = wish.x * speed;
+      vel.z = wish.z * speed;
+
+      // Jump (only when approximately grounded — vertical velocity near zero)
+      if (kb.isDown('Space') && Math.abs(vel.y) < 0.5) {
+        vel.y = this._jumpSpeed;
+      }
+
+      // Sync camera position from body (physics owns position)
+      const bp = this._rigidBody.position;
+      this.camera.transform.setPosition(bp.x, bp.y, bp.z);
+    } else {
+      // Non-physics: direct transform movement
+      const speed = this._moveSpeed * (kb.isDown('ShiftLeft') || kb.isDown('ShiftRight') ? 3 : 1) * dt;
+      const worldUp = Vector3.up();
+      const move = Vector3.zero();
+
+      if (kb.isDown('KeyW') || kb.isDown('ArrowUp')) move.addSelf(forwardXZ.scale(speed));
+      if (kb.isDown('KeyS') || kb.isDown('ArrowDown')) move.addSelf(forwardXZ.scale(-speed));
+      if (kb.isDown('KeyA') || kb.isDown('ArrowLeft')) move.addSelf(rightXZ.scale(-speed));
+      if (kb.isDown('KeyD') || kb.isDown('ArrowRight')) move.addSelf(rightXZ.scale(speed));
+      if (kb.isDown('Space')) move.addSelf(worldUp.scale(speed));
+      if (kb.isDown('ControlLeft')) move.addSelf(worldUp.scale(-speed));
+
+      const pos = this.camera.transform.position;
+      pos.addSelf(move);
+      this.camera.transform.markDirty();
+    }
 
     this.applyEulerRotation();
   }

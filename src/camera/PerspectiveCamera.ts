@@ -17,7 +17,7 @@ export class PerspectiveCamera extends Camera {
    * @param near   Near clipping plane (default 0.1)
    * @param far    Far clipping plane (default 1000)
    */
-  constructor(fov = 60, aspect = 16 / 9, near = 0.1, far = 1000) {
+  constructor(fov = 90, aspect = 16 / 9, near = 0.1, far = 1000) {
     super('PerspectiveCamera');
     this._fov = fov;
     this._aspect = aspect;
