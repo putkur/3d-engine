@@ -77,3 +77,8 @@ export { Mouse } from './input/Mouse';
 export { GamepadInput, GamepadButton, GamepadAxis } from './input/Gamepad';
 export { InputManager } from './input/InputManager';
 export type { ActionBinding } from './input/InputManager';
+
+// Debug
+export { Stats } from './debug/Stats';
+export { DebugRenderer } from './debug/DebugRenderer';
+export { Inspector } from './debug/Inspector';

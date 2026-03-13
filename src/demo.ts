@@ -19,6 +19,9 @@ import { RigidBody, BodyType } from './physics/RigidBody';
 import { BoxCollider } from './physics/BoxCollider';
 import { SphereCollider } from './physics/SphereCollider';
 import { PlaneCollider } from './physics/PlaneCollider';
+import { Stats } from './debug/Stats';
+import { DebugRenderer } from './debug/DebugRenderer';
+import { Inspector } from './debug/Inspector';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -155,6 +158,15 @@ scene.add(pointLight);
 // --- Shadow map ---
 const shadowMap = new ShadowMap(gl, 2048);
 
+// --- Debug tools ---
+const stats = new Stats();
+stats.setRenderer(renderer);
+
+const debugRenderer = new DebugRenderer(gl);
+
+const inspector = new Inspector();
+inspector.attach(scene, debugRenderer);
+
 // --- Camera ---
 const aspect = engine.canvas.width / engine.canvas.height;
 const camera = new PerspectiveCamera(60, aspect, 0.1, 100);
@@ -204,6 +216,26 @@ function addSlider(label: string, min: number, max: number, step: number, value:
 
 addSlider('FOV', 30, 120, 1, camera.fov, (v) => { camera.fov = v; });
 addSlider('Sensitivity', 0.05, 1, 0.05, controller.lookSensitivity, (v) => { controller.lookSensitivity = v; });
+
+// --- Debug mode toggle ---
+let debugMode = true;
+const debugRow = document.createElement('label');
+debugRow.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;';
+const debugCheckbox = document.createElement('input');
+debugCheckbox.type = 'checkbox';
+debugCheckbox.checked = debugMode;
+debugCheckbox.addEventListener('change', () => {
+  debugMode = debugCheckbox.checked;
+  stats.setVisible(debugMode);
+  debugRenderer.enabled = debugMode;
+  inspector.setVisible(debugMode);
+});
+const debugLabel = document.createElement('span');
+debugLabel.textContent = 'Debug Mode';
+debugRow.appendChild(debugCheckbox);
+debugRow.appendChild(debugLabel);
+panel.appendChild(debugRow);
+
 document.body.appendChild(panel);
 
 // Handle resize
@@ -275,7 +307,15 @@ function setLightUniforms(shader: ShaderProgram, lights: Light[]): void {
 
 // --- Physics update on fixed timestep ---
 engine.on('fixedUpdate', (fixedDt: number) => {
+  const t0 = performance.now();
   physicsWorld.step(fixedDt);
+  stats.setPhysicsTime((performance.now() - t0) / 1000);
+});
+
+// --- Per-frame stats & inspector ---
+engine.on('update', (dt: number) => {
+  stats.update(dt);
+  inspector.update(dt);
 });
 
 engine.on('render', () => {
@@ -347,6 +387,9 @@ engine.on('render', () => {
 
     renderer.drawElements(vao);
   }
+
+  // --- Debug overlay pass ---
+  debugRenderer.render(camera, physicsWorld);
 });
 
 engine.start();
