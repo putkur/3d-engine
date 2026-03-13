@@ -81,6 +81,13 @@ src/
 │   ├── Mouse.ts
 │   └── Gamepad.ts
 │
+├── animation/             # Skeletal & keyframe animation
+│   ├── AnimationClip.ts   # Named clip: array of tracks, duration
+│   ├── AnimationTrack.ts  # Per-property keyframe channel (position/rotation/scale)
+│   ├── AnimationMixer.ts  # Play, pause, loop, crossfade one or more clips on a node
+│   ├── Skeleton.ts        # Bone hierarchy, inverse bind matrices, joint palette
+│   └── SkinnedMesh.ts     # Mesh + Skeleton; uploads joint matrices to GPU
+│
 ├── debug/                 # Development tools
 │   ├── DebugRenderer.ts   # Wireframe, collider visualization, grid
 │   ├── Stats.ts           # FPS, draw calls, triangle count overlay
@@ -553,6 +560,90 @@ Make the engine production-ready with solid performance.
 
 ---
 
+## Phase 13 — Animation System
+
+### Goals
+Add skeletal and keyframe animation support so meshes can be driven by bone hierarchies and
+time-sampled property tracks. Integrate with the glTF loader to play back `skins` and
+`animations` exported from DCCs (Blender, Maya, etc.).
+
+### Steps
+
+1. **`AnimationTrack.ts`**
+   - Represents a single animated property channel on a target node.
+   - Properties: `targetPath` (`"position"` | `"rotation"` | `"scale"` | `"weights"`), `times: Float32Array`, `values: Float32Array`.
+   - Interpolation modes: `STEP`, `LINEAR`, `CUBICSPLINE` (Catmull-Rom / glTF cubic).
+   - `evaluate(t: number): number[]` — sample the channel at time `t`.
+
+2. **`AnimationClip.ts`**
+   - Named collection of `AnimationTrack[]` plus a `duration` (seconds).
+   - `static fromGLTF(gltfAnim, nodes)` — convert a parsed glTF animation object into an `AnimationClip`.
+   - Clips are data-only; playback is handled by `AnimationMixer`.
+
+3. **`AnimationMixer.ts`**
+   - Manages one or more active `AnimationAction` instances on a root `SceneNode`.
+   - `play(clip, options?)` — creates an `AnimationAction`, returns it.
+   - `crossFadeTo(fromAction, toAction, duration)` — smooth weight blend over `duration` seconds.
+   - `update(dt)` — advance all active actions; write sampled values back to each target node's `Transform`.
+   - Supports `loop: boolean`, `timeScale`, `weight` (for blending).
+
+4. **`Skeleton.ts`**
+   - `joints: SceneNode[]` — ordered list of bone nodes matching the glTF skin joint array.
+   - `inverseBindMatrices: Matrix4[]` — one per joint, loaded from the glTF accessor.
+   - `jointMatrices: Float32Array` — flattened `4×4 × numJoints` palette uploaded to the shader each frame.
+   - `update()` — recomputes `jointMatrices`: `jointMatrix[i] = joint.worldMatrix * inverseBindMatrix[i]`.
+
+5. **`SkinnedMesh.ts`** (extends `Mesh`)
+   - Adds `skeleton: Skeleton` and optional per-vertex `joints` (uvec4) + `weights` (vec4) attribute buffers.
+   - `render(camera)` — calls `skeleton.update()`, uploads `u_jointMatrices` uniform array, then draws.
+   - Falls back to rigid rendering when no skeleton is attached.
+
+6. **Skinning shader** (`shaders/skinned.vert` / reuse `phong.frag`)
+   - New vertex shader that reads `a_joints` (uvec4) and `a_weights` (vec4).
+   - Computes the blended skin matrix:
+     ```glsl
+     mat4 skin = w.x * u_jointMatrices[j.x]
+               + w.y * u_jointMatrices[j.y]
+               + w.z * u_jointMatrices[j.z]
+               + w.w * u_jointMatrices[j.w];
+     vec4 skinnedPos = skin * vec4(a_position, 1.0);
+     ```
+   - Normals are transformed with the inverse-transpose of the skin matrix.
+   - Maximum joint palette size: 128 joints (uniform array limit).
+
+7. **Update `GLTFLoader.ts`**
+   - Parse `skins` → build `Skeleton` with joint nodes + inverse bind matrices.
+   - Parse `animations` → build `AnimationClip[]` from animation channels + samplers.
+   - Attach `joints` and `weights` accessors as extra vertex attribute buffers on `SkinnedMesh`.
+   - Return `{ meshes, skeletons, clips }` from the loader.
+
+8. **`AnimationMixer` integration in the update loop**
+   - Create one `AnimationMixer` per animated character / object.
+   - Call `mixer.update(dt)` each frame in the `engine 'update'` event.
+   - Bone transforms propagate through the normal `scene.updateMatrixWorld()` call that already runs before rendering.
+
+9. **Blend trees (optional, advanced)**
+   - `BlendTree` node that inputs multiple clips weighted by a parameter (e.g. `speed`).
+   - Linear 1D blend: lerp between two clips based on a scalar.
+   - 2D blend: four-corner blend for locomotion (idle/walk/run/strafe).
+
+10. **Morph targets / blend shapes**
+    - Store per-vertex delta buffers (`morphPositions[]`, `morphNormals[]`) on `Geometry`.
+    - Upload `u_morphWeights` uniform array; shader adds weighted deltas to base positions.
+    - `AnimationTrack` with `targetPath: "weights"` drives morph weights for facial animation.
+
+11. **`DebugRenderer` extensions**
+    - Draw skeleton bone lines (joint-to-parent) as coloured line segments.
+    - Draw joint axes (tiny RGB gizmos) for each bone when debug mode is active.
+
+12. **Verify**
+    - Load a rigged glTF character (e.g., the Khronos `Fox.glb` or `RiggedFigure.glb` sample).
+    - Play its walk/idle animation clip in a loop.
+    - Hot-swap between two clips with `crossFadeTo()` on a key press.
+    - Confirm skeleton debug visualisation draws correct bone hierarchy.
+
+---
+
 ## Build & Run Commands
 
 ```bash
@@ -581,8 +672,9 @@ npm run lint
 | Language       | TypeScript 5.x (strict mode)       |
 | Math           | gl-matrix (vec, mat, quat)          |
 | Rendering      | WebGL 2 (native, no wrapper libs)  |
-| Physics        | Custom rigid-body engine (built-in) |
-| Build          | Webpack 5 + ts-loader              |
+| Physics        | Custom rigid-body engine (Web Worker) |
+| Animation      | Custom skeletal + keyframe (built-in) |
+| Build          | Webpack 5 + ts-loader, code-split    |
 | Testing        | Vitest                              |
 | Linting        | ESLint + @typescript-eslint         |
 | Formatting     | Prettier                            |
@@ -616,6 +708,7 @@ Phase 9  → Input system                (user control)
 Phase 10 → Debug tools                 (developer experience)
 Phase 11 → Advanced rendering          (visual polish)
 Phase 12 → Optimization & production   (ship it)
+Phase 13 → Animation system            (bring scenes to life)
 ```
 
 Each phase builds on the previous. Phases 1–5 get a visible, navigable 3D scene running. Phase 7 (physics) is the largest single effort and can be developed in parallel with Phases 5–6 since it only depends on the math library and scene sync.

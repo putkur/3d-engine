@@ -32,6 +32,9 @@ import { Frustum } from './renderer/Frustum';
 import { RenderQueue } from './renderer/RenderQueue';
 import { BVH } from './scene/BVH';
 import { PhysicsWorkerHost } from './physics/PhysicsWorkerHost';
+import { AnimationClip } from './animation/AnimationClip';
+import { AnimationTrack, Interpolation } from './animation/AnimationTrack';
+import { AnimationMixer } from './animation/AnimationMixer';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -263,6 +266,310 @@ engine.canvas.addEventListener('click', () => {
   controller.requestPointerLock();
 });
 
+// --- Phase 13: Animated robot character ---
+//
+// A simple hierarchical "robot" built from SceneNodes (joints) + Mesh children.
+// The AnimationMixer drives keyframe tracks that animate the joint rotations and
+// the root position, demonstrating: LINEAR / STEP interpolation, multi-track clips,
+// and crossfade between two clips (idle bob ↔ arm wave).
+//
+// Node hierarchy:
+//   robotRoot
+//     torso   (mesh)
+//       head  (mesh)
+//       armL  (joint)  → lowerArmL (mesh)
+//       armR  (joint)  → lowerArmR (mesh)
+//       legL  (mesh)
+//       legR  (mesh)
+// -----------------------------------------------------------------------
+
+import { SceneNode } from './scene/SceneNode';
+
+// Joint nodes
+const robotRoot = new SceneNode('robotRoot');
+const torsoJoint = new SceneNode('torsoJoint');
+const headJoint  = new SceneNode('headJoint');
+const armLJoint  = new SceneNode('armLJoint');
+const armRJoint  = new SceneNode('armRJoint');
+const lArmLJoint = new SceneNode('lArmLJoint');
+const lArmRJoint = new SceneNode('lArmRJoint');
+
+// Geometry shared by all body parts (small-ish boxes)
+const torsoGeo    = Geometry.createBox(0.4, 0.6, 0.25);
+const headGeo     = Geometry.createBox(0.3, 0.3, 0.3);
+const upperArmGeo = Geometry.createBox(0.12, 0.35, 0.12);
+const lowerArmGeo = Geometry.createBox(0.1,  0.3,  0.1);
+const legGeo      = Geometry.createBox(0.14, 0.45, 0.14);
+
+// Materials
+const robotColor: [number, number, number, number] = [0.75, 0.75, 0.85, 1];
+const robotMat  = new Material(program, { color: robotColor, specular: 0.7, shininess: 80 });
+const headColor: [number, number, number, number]  = [0.95, 0.85, 0.75, 1];
+const headMat   = new Material(program, { color: headColor,  specular: 0.4, shininess: 30 });
+const legColor: [number, number, number, number]   = [0.3,  0.35, 0.5,  1];
+const legMat    = new Material(program, { color: legColor,   specular: 0.3, shininess: 16 });
+
+// Meshes (visual only — no physics)
+const torsoMesh = new Mesh(torsoGeo, robotMat, 'torsoMesh');
+torsoMesh.transform.setPosition(0, 0, 0);
+
+const headMesh = new Mesh(headGeo, headMat, 'headMesh');
+headMesh.transform.setPosition(0, 0.48, 0);  // sit on top of torso
+
+const upperArmLMesh = new Mesh(upperArmGeo, robotMat, 'upperArmLMesh');
+upperArmLMesh.transform.setPosition(0, -0.175, 0);  // hang down from shoulder
+
+const lowerArmLMesh = new Mesh(lowerArmGeo, robotMat, 'lowerArmLMesh');
+lowerArmLMesh.transform.setPosition(0, -0.15, 0);
+
+const upperArmRMesh = new Mesh(upperArmGeo, robotMat, 'upperArmRMesh');
+upperArmRMesh.transform.setPosition(0, -0.175, 0);
+
+const lowerArmRMesh = new Mesh(lowerArmGeo, robotMat, 'lowerArmRMesh');
+lowerArmRMesh.transform.setPosition(0, -0.15, 0);
+
+const legLMesh = new Mesh(legGeo, legMat, 'legLMesh');
+legLMesh.transform.setPosition(0, -0.525, 0);
+
+const legRMesh = new Mesh(legGeo, legMat, 'legRMesh');
+legRMesh.transform.setPosition(0, -0.525, 0);
+
+// Build hierarchy
+// Shoulder joints offset sideways from torso centre
+armLJoint.transform.setPosition(-0.29, 0.22, 0);  // left shoulder pivot
+armRJoint.transform.setPosition( 0.29, 0.22, 0);  // right shoulder pivot
+
+// Elbow joints hang below the upper arm
+lArmLJoint.transform.setPosition(0, -0.35, 0);
+lArmRJoint.transform.setPosition(0, -0.35, 0);
+
+// Head pivot (bone for head bob)
+headJoint.transform.setPosition(0, 0.30, 0); // top of torso
+
+armLJoint.add(upperArmLMesh);
+armLJoint.add(lArmLJoint);
+lArmLJoint.add(lowerArmLMesh);
+
+armRJoint.add(upperArmRMesh);
+armRJoint.add(lArmRJoint);
+lArmRJoint.add(lowerArmRMesh);
+
+// Leg roots hang directly off torso
+const legLJoint = new SceneNode('legLJoint');
+const legRJoint = new SceneNode('legRJoint');
+legLJoint.transform.setPosition(-0.14, -0.30, 0);
+legRJoint.transform.setPosition( 0.14, -0.30, 0);
+legLJoint.add(legLMesh);
+legRJoint.add(legRMesh);
+
+headJoint.add(headMesh);
+
+torsoJoint.add(torsoMesh);
+torsoJoint.add(headJoint);
+torsoJoint.add(armLJoint);
+torsoJoint.add(armRJoint);
+torsoJoint.add(legLJoint);
+torsoJoint.add(legRJoint);
+
+robotRoot.add(torsoJoint);
+
+// Place robot to the left of the physics stack
+robotRoot.transform.setPosition(-5, 0.9, 0);
+
+// Add all meshes to the scene so the renderer sees them
+scene.add(robotRoot);
+// The SceneNode children (joints) holding meshes aren't added to scene's flat
+// mesh list automatically — we traverse and add each Mesh directly:
+robotRoot.traverse(node => {
+  if ((node as Mesh).isMesh) scene.add(node as Mesh);
+});
+
+// -----------------------------------------------------------------------
+// Animation clips — created purely from keyframe data (no glTF needed)
+// -----------------------------------------------------------------------
+
+const TAU = Math.PI * 2;
+
+// Helper: pack a Float32Array for a rotation track (sequence of [x,y,z,w])
+function rotKeys(frames: [number, number, number, number][]): Float32Array {
+  const out = new Float32Array(frames.length * 4);
+  for (let i = 0; i < frames.length; i++) {
+    out[i * 4]     = frames[i][0];
+    out[i * 4 + 1] = frames[i][1];
+    out[i * 4 + 2] = frames[i][2];
+    out[i * 4 + 3] = frames[i][3];
+  }
+  return out;
+}
+
+// Helper: pack a Float32Array for a position track (sequence of [x,y,z])
+function posKeys(frames: [number, number, number][]): Float32Array {
+  const out = new Float32Array(frames.length * 3);
+  for (let i = 0; i < frames.length; i++) {
+    out[i * 3]     = frames[i][0];
+    out[i * 3 + 1] = frames[i][1];
+    out[i * 3 + 2] = frames[i][2];
+  }
+  return out;
+}
+
+// Utility: axis-angle to quaternion
+function axisAngle(ax: number, ay: number, az: number, rad: number): [number, number, number, number] {
+  const s = Math.sin(rad / 2);
+  return [ax * s, ay * s, az * s, Math.cos(rad / 2)];
+}
+
+// -----------------------------------------------------------------------
+// CLIP 1: "idle" — gentle torso bob + slow head look around
+// -----------------------------------------------------------------------
+
+const idleDuration = 2.0;
+const idleTimes4 = new Float32Array([0, 0.5, 1.0, 1.5, 2.0]);
+const idleTimes2 = new Float32Array([0, 1.0, 2.0]);
+
+// Torso bobs up/down
+const idleTorsoPos = new AnimationTrack(
+  'torsoJoint', 'position',
+  idleTimes4,
+  posKeys([
+    [0, 0, 0],
+    [0, 0.04, 0],
+    [0, 0, 0],
+    [0, 0.04, 0],
+    [0, 0, 0],
+  ]),
+  Interpolation.LINEAR,
+);
+
+// Head tilts slightly
+const idleHeadRot = new AnimationTrack(
+  'headJoint', 'rotation',
+  idleTimes2,
+  rotKeys([
+    axisAngle(0, 1, 0,  0.0),
+    axisAngle(0, 1, 0,  0.3),
+    axisAngle(0, 1, 0,  0.0),
+  ]),
+  Interpolation.LINEAR,
+);
+
+// Arms hang at sides with tiny swing
+const idleArmLRot = new AnimationTrack(
+  'armLJoint', 'rotation',
+  idleTimes4,
+  rotKeys([
+    axisAngle(1, 0, 0,  0.1),
+    axisAngle(1, 0, 0,  0.0),
+    axisAngle(1, 0, 0,  0.1),
+    axisAngle(1, 0, 0,  0.0),
+    axisAngle(1, 0, 0,  0.1),
+  ]),
+  Interpolation.LINEAR,
+);
+
+const idleArmRRot = new AnimationTrack(
+  'armRJoint', 'rotation',
+  idleTimes4,
+  rotKeys([
+    axisAngle(1, 0, 0, -0.1),
+    axisAngle(1, 0, 0,  0.0),
+    axisAngle(1, 0, 0, -0.1),
+    axisAngle(1, 0, 0,  0.0),
+    axisAngle(1, 0, 0, -0.1),
+  ]),
+  Interpolation.LINEAR,
+);
+
+const idleClip = new AnimationClip('idle', [
+  idleTorsoPos,
+  idleHeadRot,
+  idleArmLRot,
+  idleArmRRot,
+], idleDuration);
+
+// -----------------------------------------------------------------------
+// CLIP 2: "wave" — right arm raises and waves (forearm flaps)
+// -----------------------------------------------------------------------
+
+const waveDuration = 1.2;
+const waveTimes3 = new Float32Array([0.0, 0.3, 0.6, 0.9, 1.2]);
+
+// Upper right arm raises to ~90° forward
+const waveShoulderRot = new AnimationTrack(
+  'armRJoint', 'rotation',
+  waveTimes3,
+  rotKeys([
+    axisAngle(1, 0, 0, 0.0),
+    axisAngle(1, 0, 0, -1.5),
+    axisAngle(1, 0, 0, -1.5),
+    axisAngle(1, 0, 0, -1.5),
+    axisAngle(1, 0, 0, 0.0),
+  ]),
+  Interpolation.LINEAR,
+);
+
+// Forearm flaps at elbow
+const waveElbowRot = new AnimationTrack(
+  'lArmRJoint', 'rotation',
+  waveTimes3,
+  rotKeys([
+    axisAngle(1, 0, 0, 0.0),
+    axisAngle(1, 0, 0, 0.6),
+    axisAngle(1, 0, 0, -0.3),
+    axisAngle(1, 0, 0, 0.6),
+    axisAngle(1, 0, 0, 0.0),
+  ]),
+  Interpolation.LINEAR,
+);
+
+// Torso stays centred
+const waveTorsoPos = new AnimationTrack(
+  'torsoJoint', 'position',
+  new Float32Array([0.0, 1.2]),
+  posKeys([[0, 0, 0], [0, 0, 0]]),
+  Interpolation.STEP,
+);
+
+const waveClip = new AnimationClip('wave', [
+  waveShoulderRot,
+  waveElbowRot,
+  waveTorsoPos,
+], waveDuration);
+
+// -----------------------------------------------------------------------
+// Mixer
+// -----------------------------------------------------------------------
+const robotMixer = new AnimationMixer(robotRoot);
+const idleAction = robotMixer.play(idleClip, { loop: true, weight: 1 });
+const waveAction = robotMixer.play(waveClip, { loop: true, weight: 0 });
+waveAction.pause();  // starts dormant; crossFadeTo will resume it
+
+let robotAnimMode: 'idle' | 'wave' = 'idle';
+
+// Tab key to crossfade between idle ↔ wave
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Tab') {
+    e.preventDefault();
+    if (robotAnimMode === 'idle') {
+      robotMixer.crossFadeTo(idleAction, waveAction, 0.4);
+      robotAnimMode = 'wave';
+    } else {
+      robotMixer.crossFadeTo(waveAction, idleAction, 0.4);
+      robotAnimMode = 'idle';
+    }
+  }
+});
+
+// Label above robot (using existing settings panel pattern - small overlay)
+const robotLabel = document.createElement('div');
+robotLabel.style.cssText =
+  'position:fixed;bottom:8px;left:8px;background:rgba(0,0,0,0.65);color:#fff;' +
+  'padding:8px 12px;border-radius:6px;font:12px monospace;z-index:1000;';
+robotLabel.innerHTML =
+  '<b>Robot (Phase 13 — Animation)</b><br>' +
+  'Press <b>Tab</b> to crossfade: Idle ↔ Wave';
+document.body.appendChild(robotLabel);
+
 // --- Phase 12: Frustum culling, BVH, Render queue ---
 const frustum      = new Frustum();
 const bvh          = new BVH();
@@ -424,6 +731,8 @@ engine.on('update', (dt: number) => {
   stats.update(dt);
   inspector.update(dt);
   particles.update(dt);
+  // Phase 13 — advance robot animation mixer
+  robotMixer.update(dt);
 });
 
 engine.on('render', () => {

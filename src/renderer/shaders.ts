@@ -18,6 +18,7 @@ import postprocessVertSrc from './shaders/postprocess.vert';
 import postprocessFragSrc from './shaders/postprocess.frag';
 import bloomExtractFragSrc from './shaders/bloom_extract.frag';
 import blurFragSrc from './shaders/blur.frag';
+import skinnedVertSrc from './shaders/skinned.vert';
 
 export const basicVert = basicVertSrc;
 export const basicFrag = basicFragSrc;
@@ -46,4 +47,5 @@ export const postprocessVert = postprocessVertSrc;
 export const postprocessFrag = postprocessFragSrc;
 export const bloomExtractFrag = bloomExtractFragSrc;
 export const blurFrag = blurFragSrc;
+export const skinnedVert = skinnedVertSrc;
 

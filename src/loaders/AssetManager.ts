@@ -2,6 +2,7 @@ import { Texture } from '../renderer/Texture';
 import { TextureLoader } from './TextureLoader';
 import { OBJLoader } from './OBJLoader';
 import { GLTFLoader } from './GLTFLoader';
+import type { GLTFLoadResult } from './GLTFLoader';
 import { ShaderProgram } from '../renderer/ShaderProgram';
 import { SceneNode } from '../scene/SceneNode';
 import { TextureOptions } from '../renderer/Texture';
@@ -9,7 +10,7 @@ import { TextureOptions } from '../renderer/Texture';
 /**
  * Supported asset types managed by the AssetManager.
  */
-export type Asset = Texture | SceneNode;
+export type Asset = Texture | SceneNode | GLTFLoadResult;
 
 /**
  * Progress callback for asset loading.
@@ -55,9 +56,9 @@ export class AssetManager {
   /**
    * Load a glTF/GLB model from URL. Returns cached version if already loaded.
    */
-  async loadGLTF(url: string, shader: ShaderProgram): Promise<SceneNode> {
+  async loadGLTF(url: string, shader: ShaderProgram): Promise<GLTFLoadResult> {
     const key = `gltf:${url}`;
-    return this.loadAsset(key, () => this.gltfLoader.load(url, shader)) as Promise<SceneNode>;
+    return this.loadAsset(key, () => this.gltfLoader.load(url, shader)) as Promise<GLTFLoadResult>;
   }
 
   /**

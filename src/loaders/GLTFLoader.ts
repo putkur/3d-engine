@@ -4,6 +4,11 @@ import { Mesh } from '../scene/Mesh';
 import { SceneNode } from '../scene/SceneNode';
 import { ShaderProgram } from '../renderer/ShaderProgram';
 import { Texture, TextureFilter, TextureWrap, TextureOptions } from '../renderer/Texture';
+import { Matrix4 } from '../math/Matrix4';
+import { Skeleton } from '../animation/Skeleton';
+import { SkinnedMesh } from '../animation/SkinnedMesh';
+import { AnimationClip } from '../animation/AnimationClip';
+import { AnimationTrack, Interpolation, TargetPath } from '../animation/AnimationTrack';
 
 // ---------------------------------------------------------------
 // glTF 2.0 JSON Schema types (subset needed for loading)
@@ -22,6 +27,8 @@ interface GLTFJson {
   textures?: GLTFTextureInfo[];
   images?: GLTFImage[];
   samplers?: GLTFSampler[];
+  skins?: GLTFSkin[];
+  animations?: GLTFAnimation[];
 }
 
 interface GLTFScene { nodes?: number[]; name?: string; }
@@ -30,10 +37,35 @@ interface GLTFNode {
   name?: string;
   mesh?: number;
   children?: number[];
+  skin?: number;
   translation?: [number, number, number];
   rotation?: [number, number, number, number];
   scale?: [number, number, number];
   matrix?: number[];
+}
+
+interface GLTFSkin {
+  name?: string;
+  inverseBindMatrices?: number;
+  joints: number[];
+  skeleton?: number;
+}
+
+interface GLTFAnimation {
+  name?: string;
+  channels: GLTFAnimationChannel[];
+  samplers: GLTFAnimationSampler[];
+}
+
+interface GLTFAnimationChannel {
+  sampler: number;
+  target: { node: number; path: string };
+}
+
+interface GLTFAnimationSampler {
+  input: number;   // accessor index for time values
+  output: number;  // accessor index for value data
+  interpolation?: string;
 }
 
 interface GLTFMesh {
@@ -115,6 +147,12 @@ const TYPE_SIZES: Record<string, number> = {
   SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16,
 };
 
+export interface GLTFLoadResult {
+  root: SceneNode;
+  skeletons: Skeleton[];
+  clips: AnimationClip[];
+}
+
 /**
  * glTF 2.0 loader.
  * Supports .gltf (JSON + separate binaries) and .glb (single binary) formats.
@@ -127,9 +165,9 @@ export class GLTFLoader {
   }
 
   /**
-   * Load a glTF/glb file and return a SceneNode hierarchy with Mesh children.
+   * Load a glTF/glb file and return the scene hierarchy, skeletons, and animation clips.
    */
-  async load(url: string, defaultShader: ShaderProgram): Promise<SceneNode> {
+  async load(url: string, defaultShader: ShaderProgram): Promise<GLTFLoadResult> {
     const isGLB = url.toLowerCase().endsWith('.glb');
     const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
 
@@ -164,6 +202,9 @@ export class GLTFLoader {
     // Build materials
     const materials = this.buildMaterials(json, defaultShader, textures);
 
+    // Build a flat list of all nodes first (needed for skin joint references)
+    const allNodes: (SceneNode | null)[] = [];
+
     // Build scene graph
     const sceneIndex = json.scene ?? 0;
     const scene = json.scenes?.[sceneIndex];
@@ -171,12 +212,21 @@ export class GLTFLoader {
 
     if (scene?.nodes) {
       for (const nodeIdx of scene.nodes) {
-        const child = this.buildNode(json, nodeIdx, buffers, materials, defaultShader);
+        const child = this.buildNode(json, nodeIdx, buffers, materials, defaultShader, allNodes);
         if (child) root.add(child);
       }
     }
 
-    return root;
+    // Build skeletons from skins
+    const skeletons = this.buildSkeletons(json, allNodes, buffers);
+
+    // Attach skeletons to SkinnedMesh nodes
+    this.attachSkeletons(json, allNodes, skeletons);
+
+    // Parse animation clips
+    const clips = this.buildAnimationClips(json, allNodes, buffers);
+
+    return { root, skeletons, clips };
   }
 
   // ---------------------------------------------------------------
@@ -438,6 +488,7 @@ export class GLTFLoader {
     buffers: ArrayBuffer[],
     materials: Material[],
     defaultShader: ShaderProgram,
+    allNodes: (SceneNode | null)[],
   ): SceneNode | null {
     const nodeDef = json.nodes?.[nodeIdx];
     if (!nodeDef) return null;
@@ -447,15 +498,16 @@ export class GLTFLoader {
     // If the node has a mesh, create mesh nodes
     if (nodeDef.mesh !== undefined) {
       const meshDef = json.meshes?.[nodeDef.mesh];
+      // Use SkinnedMesh when node has a skin reference
+      const useSkinned = nodeDef.skin !== undefined;
+
       if (meshDef && meshDef.primitives.length === 1) {
-        // Single primitive → node IS the mesh
-        node = this.buildPrimitive(json, meshDef.primitives[0], buffers, materials, defaultShader);
+        node = this.buildPrimitive(json, meshDef.primitives[0], buffers, materials, defaultShader, useSkinned);
         node.name = nodeDef.name ?? meshDef.name ?? '';
       } else if (meshDef) {
-        // Multiple primitives → container node with mesh children
         node = new SceneNode(nodeDef.name ?? meshDef.name ?? '');
         for (let i = 0; i < meshDef.primitives.length; i++) {
-          const child = this.buildPrimitive(json, meshDef.primitives[i], buffers, materials, defaultShader);
+          const child = this.buildPrimitive(json, meshDef.primitives[i], buffers, materials, defaultShader, useSkinned);
           child.name = `${node.name}_prim${i}`;
           node.add(child);
         }
@@ -465,6 +517,9 @@ export class GLTFLoader {
     } else {
       node = new SceneNode(nodeDef.name ?? '');
     }
+
+    // Store in allNodes by index for cross-referencing (skin joints, animation targets)
+    allNodes[nodeIdx] = node;
 
     // Apply transform
     if (nodeDef.matrix) {
@@ -495,7 +550,7 @@ export class GLTFLoader {
     // Recurse children
     if (nodeDef.children) {
       for (const childIdx of nodeDef.children) {
-        const child = this.buildNode(json, childIdx, buffers, materials, defaultShader);
+        const child = this.buildNode(json, childIdx, buffers, materials, defaultShader, allNodes);
         if (child) node.add(child);
       }
     }
@@ -557,6 +612,7 @@ export class GLTFLoader {
     buffers: ArrayBuffer[],
     materials: Material[],
     defaultShader: ShaderProgram,
+    useSkinned = false,
   ): Mesh {
     const attrs = primitive.attributes;
 
@@ -625,6 +681,129 @@ export class GLTFLoader {
       ? materials[primitive.material]
       : new Material(defaultShader);
 
+    // Skinning data
+    if (useSkinned && (attrs['JOINTS_0'] !== undefined || attrs['WEIGHTS_0'] !== undefined)) {
+      const skinned = new SkinnedMesh(geometry, material);
+
+      if (attrs['JOINTS_0'] !== undefined) {
+        const rawJoints = this.getAccessorData(json, attrs['JOINTS_0'], buffers) as unknown as ArrayLike<number>;
+        // Convert to Float32Array for upload as vec4
+        const floatJoints = new Float32Array(rawJoints.length);
+        for (let i = 0; i < rawJoints.length; i++) {
+          floatJoints[i] = rawJoints[i];
+        }
+        skinned.jointsData = floatJoints;
+      }
+
+      if (attrs['WEIGHTS_0'] !== undefined) {
+        skinned.weightsData = this.getFloatAccessor(json, attrs['WEIGHTS_0'], buffers);
+      }
+
+      return skinned;
+    }
+
     return new Mesh(geometry, material);
+  }
+
+  // ---------------------------------------------------------------
+  // Skeleton building
+  // ---------------------------------------------------------------
+
+  private buildSkeletons(
+    json: GLTFJson,
+    allNodes: (SceneNode | null)[],
+    buffers: ArrayBuffer[],
+  ): Skeleton[] {
+    const skinDefs = json.skins ?? [];
+    return skinDefs.map(skin => {
+      const joints = skin.joints.map(idx => allNodes[idx] ?? new SceneNode(`joint_${idx}`));
+
+      let inverseBindMatrices: Matrix4[];
+      if (skin.inverseBindMatrices !== undefined) {
+        const ibmData = this.getFloatAccessor(json, skin.inverseBindMatrices, buffers);
+        inverseBindMatrices = joints.map((_, i) => {
+          const m = new Matrix4();
+          for (let j = 0; j < 16; j++) m.data[j] = ibmData[i * 16 + j];
+          return m;
+        });
+      } else {
+        inverseBindMatrices = joints.map(() => Matrix4.identity());
+      }
+
+      return new Skeleton(joints, inverseBindMatrices);
+    });
+  }
+
+  private attachSkeletons(
+    json: GLTFJson,
+    allNodes: (SceneNode | null)[],
+    skeletons: Skeleton[],
+  ): void {
+    const nodeDefs = json.nodes ?? [];
+    for (let nodeIdx = 0; nodeIdx < nodeDefs.length; nodeIdx++) {
+      const nodeDef = nodeDefs[nodeIdx];
+      if (nodeDef.skin === undefined) continue;
+      const node = allNodes[nodeIdx];
+      if (!node) continue;
+      const skeleton = skeletons[nodeDef.skin];
+      if (!skeleton) continue;
+
+      if (node instanceof SkinnedMesh) {
+        node.skeleton = skeleton;
+      } else {
+        for (const child of node.children) {
+          if (child instanceof SkinnedMesh) {
+            (child as SkinnedMesh).skeleton = skeleton;
+          }
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Animation clip building
+  // ---------------------------------------------------------------
+
+  private buildAnimationClips(
+    json: GLTFJson,
+    allNodes: (SceneNode | null)[],
+    buffers: ArrayBuffer[],
+  ): AnimationClip[] {
+    const animDefs = json.animations ?? [];
+    return animDefs.map(animDef => {
+      const tracks: AnimationTrack[] = [];
+
+      for (const channel of animDef.channels) {
+        const samplerDef = animDef.samplers[channel.sampler];
+        const targetNodeIdx = channel.target.node;
+        const targetNode = allNodes[targetNodeIdx];
+        if (!targetNode) continue;
+
+        const targetPath = channel.target.path as TargetPath;
+        const validPaths: TargetPath[] = ['position', 'rotation', 'scale', 'weights'];
+        if (!validPaths.includes(targetPath)) continue;
+
+        const timesRaw  = this.getFloatAccessor(json, samplerDef.input,  buffers);
+        const valuesRaw = this.getFloatAccessor(json, samplerDef.output, buffers);
+
+        const interp: Interpolation = (() => {
+          switch ((samplerDef.interpolation ?? 'LINEAR').toUpperCase()) {
+            case 'STEP':        return Interpolation.STEP;
+            case 'CUBICSPLINE': return Interpolation.CUBICSPLINE;
+            default:            return Interpolation.LINEAR;
+          }
+        })();
+
+        tracks.push(new AnimationTrack(
+          targetNode.name || `node_${targetNodeIdx}`,
+          targetPath,
+          new Float32Array(timesRaw),
+          new Float32Array(valuesRaw),
+          interp,
+        ));
+      }
+
+      return new AnimationClip(animDef.name ?? 'Unnamed', tracks);
+    });
   }
 }

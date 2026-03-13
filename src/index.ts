@@ -78,6 +78,7 @@ export { Constraint, DistanceConstraint, HingeConstraint, FixedConstraint } from
 export { TextureLoader } from './loaders/TextureLoader';
 export { OBJLoader } from './loaders/OBJLoader';
 export { GLTFLoader } from './loaders/GLTFLoader';
+export type { GLTFLoadResult } from './loaders/GLTFLoader';
 export { AssetManager } from './loaders/AssetManager';
 export type { Asset, ProgressCallback } from './loaders/AssetManager';
 
@@ -102,3 +103,13 @@ export type { BVHCuller, BVHBounds } from './scene/BVH';
 export { ObjectPool } from './utils/Pool';
 export { PhysicsWorkerHost } from './physics/PhysicsWorkerHost';
 export type { BodyAttachment, KinematicUpdate, SerializedBody, SerializedCollider } from './physics/PhysicsWorkerHost';
+
+// Phase 13 — Animation System
+export { AnimationTrack, Interpolation } from './animation/AnimationTrack';
+export type { TargetPath } from './animation/AnimationTrack';
+export { AnimationClip } from './animation/AnimationClip';
+export { AnimationAction, AnimationMixer } from './animation/AnimationMixer';
+export type { AnimationActionOptions } from './animation/AnimationMixer';
+export { Skeleton } from './animation/Skeleton';
+export { SkinnedMesh } from './animation/SkinnedMesh';
+export { skinnedVert } from './renderer/shaders';
