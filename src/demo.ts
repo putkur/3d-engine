@@ -36,6 +36,10 @@ import { AnimationClip } from './animation/AnimationClip';
 import { AnimationTrack, Interpolation } from './animation/AnimationTrack';
 import { AnimationMixer } from './animation/AnimationMixer';
 import { SkinnedMesh } from './animation/SkinnedMesh';
+import { AudioManager } from './audio/AudioManager';
+import { AudioListener } from './audio/AudioListener';
+import { AudioClip } from './audio/AudioClip';
+import { AudioSource } from './audio/AudioSource';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -566,6 +570,108 @@ robotLabel.innerHTML =
   'Press <b>Tab</b> to crossfade: Idle ↔ Wave';
 document.body.appendChild(robotLabel);
 
+// -----------------------------------------------------------------------
+// Phase 14 — Audio System
+// -----------------------------------------------------------------------
+// AudioManager creates a Web Audio context on the first user gesture.
+// We attach an AudioListener to the camera and create:
+//  1. A spatial "hum" tone near the particle emitter — pans and attenuates
+//     with distance as the player walks around.
+//  2. A non-spatial background music drone on the "music" channel.
+
+const audioManager = new AudioManager();
+const audioListener = new AudioListener('listener');
+camera.add(audioListener);   // listener inherits camera transform
+
+// Helper: procedurally generate a looping tone as an AudioClip.
+// We can't rely on external audio files in the demo, so we synthesise
+// simple waveforms using OfflineAudioContext.
+async function makeToneClip(
+  frequency: number,
+  durationSec: number,
+  type: OscillatorType = 'sine',
+  gainValue = 0.25,
+): Promise<AudioClip> {
+  const ctx = audioManager.ensureContext();
+  const sampleRate = ctx.sampleRate;
+  const length = Math.ceil(sampleRate * durationSec);
+  const offline = new OfflineAudioContext(1, length, sampleRate);
+
+  const osc = offline.createOscillator();
+  osc.type = type;
+  osc.frequency.value = frequency;
+
+  const gain = offline.createGain();
+  gain.gain.value = gainValue;
+
+  osc.connect(gain);
+  gain.connect(offline.destination);
+  osc.start();
+  osc.stop(durationSec);
+
+  const rendered = await offline.startRendering();
+  return new AudioClip(rendered);
+}
+
+// Spatial and music sources — created after first user click (to satisfy autoplay policy).
+let spatialSource:  AudioSource | null = null;
+let musicSource:    AudioSource | null = null;
+let audioReady = false;
+
+async function initAudio() {
+  if (audioReady) return;
+  audioReady = true;
+  audioManager.ensureContext();
+
+  // 1) Spatial "hum" — a low sine near the particle emitter
+  const humClip = await makeToneClip(110, 2.0, 'sawtooth', 0.12);
+  spatialSource = audioManager.createSource({
+    clip: humClip,
+    spatial: true,
+    loop: true,
+    volume: 0.7,
+    refDistance: 2,
+    maxDistance: 30,
+    rolloffFactor: 1.5,
+  }, 'sfx');
+  spatialSource.transform.setPosition(-3, 1, -2);  // near the particle emitter
+  scene.add(spatialSource);
+  spatialSource.play();
+
+  // 2) Non-spatial background music — a quiet chord drone
+  const musicClip = await makeToneClip(65, 3.0, 'triangle', 0.08);
+  musicSource = audioManager.createSource({
+    clip: musicClip,
+    spatial: false,
+    loop: true,
+    volume: 0.35,
+  }, 'music');
+  musicSource.play();
+}
+
+// Initialise audio on first click (browser autoplay policy)
+engine.canvas.addEventListener('click', () => { initAudio(); }, { once: false });
+
+// M key toggles background music
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM') {
+    if (!musicSource) return;
+    if (musicSource.isPlaying()) musicSource.pause();
+    else musicSource.resume();
+  }
+});
+
+// Audio label overlay
+const audioLabel = document.createElement('div');
+audioLabel.style.cssText =
+  'position:fixed;bottom:46px;left:8px;background:rgba(0,0,0,0.65);color:#fff;' +
+  'padding:8px 12px;border-radius:6px;font:12px monospace;z-index:1000;';
+audioLabel.innerHTML =
+  '<b>Audio (Phase 14)</b><br>' +
+  'Click to start audio · <b>M</b> toggle music<br>' +
+  'Walk near particles (-3, 1, -2) to hear spatial hum';
+document.body.appendChild(audioLabel);
+
 // --- Phase 12: Frustum culling, BVH, Render queue ---
 const frustum      = new Frustum();
 const bvh          = new BVH();
@@ -609,6 +715,11 @@ addSlider('Sensitivity', 0.05, 1, 0.05, controller.lookSensitivity, (v) => { con
 addSlider('Exposure', 0.1, 3, 0.1, postProcess.exposure, (v) => { postProcess.exposure = v; });
 addSlider('Bloom', 0, 1, 0.05, postProcess.bloomStrength, (v) => { postProcess.bloomStrength = v; });
 addSlider('Vignette', 0, 1, 0.05, postProcess.vignetteStrength, (v) => { postProcess.vignetteStrength = v; });
+
+// Audio volume sliders (Phase 14)
+addSlider('Master Vol', 0, 1, 0.05, 1, (v) => { audioManager.masterVolume = v; });
+addSlider('SFX Vol', 0, 1, 0.05, 1, (v) => { audioManager.setChannelVolume('sfx', v); });
+addSlider('Music Vol', 0, 1, 0.05, 1, (v) => { audioManager.setChannelVolume('music', v); });
 
 // --- Debug mode toggle ---
 let debugMode = false;
@@ -731,6 +842,8 @@ engine.on('update', (dt: number) => {
   robotMixer.update(dt);
   // Update world matrices immediately after animation so transforms are current
   scene.updateMatrixWorld();
+  // Phase 14 — sync audio listener + source positions
+  audioManager.update(audioListener);
 });
 
 engine.on('render', () => {

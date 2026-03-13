@@ -113,3 +113,12 @@ export type { AnimationActionOptions } from './animation/AnimationMixer';
 export { Skeleton } from './animation/Skeleton';
 export { SkinnedMesh } from './animation/SkinnedMesh';
 export { skinnedVert } from './renderer/shaders';
+
+// Phase 14 — Audio System
+export { AudioClip } from './audio/AudioClip';
+export { AudioListener } from './audio/AudioListener';
+export { AudioSource } from './audio/AudioSource';
+export type { AudioSourceOptions, DistanceModel } from './audio/AudioSource';
+export { AudioManager } from './audio/AudioManager';
+export type { ChannelName } from './audio/AudioManager';
+export { AudioLoader } from './audio/AudioLoader';

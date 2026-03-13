@@ -88,6 +88,13 @@ src/
 │   ├── Skeleton.ts        # Bone hierarchy, inverse bind matrices, joint palette
 │   └── SkinnedMesh.ts     # Mesh + Skeleton; uploads joint matrices to GPU
 │
+├── audio/                 # 3D spatial audio (Web Audio API)
+│   ├── AudioClip.ts       # Decoded AudioBuffer wrapper
+│   ├── AudioListener.ts   # Scene-graph listener synced to camera
+│   ├── AudioSource.ts     # Positional or non-spatial sound emitter
+│   ├── AudioManager.ts    # AudioContext owner, channel groups, master volume
+│   └── AudioLoader.ts     # Async fetch + decode audio files
+│
 ├── debug/                 # Development tools
 │   ├── DebugRenderer.ts   # Wireframe, collider visualization, grid
 │   ├── Stats.ts           # FPS, draw calls, triangle count overlay
@@ -644,6 +651,82 @@ time-sampled property tracks. Integrate with the glTF loader to play back `skins
 
 ---
 
+## Phase 14 — Audio System
+
+### Goals
+Add 3D spatial audio using the **Web Audio API**. Sound sources live in the scene graph
+so they move with their parent nodes and attenuate naturally with distance from the
+listener (camera). Support one-shot sound effects, looping ambient sounds, and
+non-spatial background music with per-channel volume control.
+
+### Steps
+
+1. **`AudioClip.ts`**
+   - Thin wrapper around a decoded `AudioBuffer`.
+   - Read-only properties: `duration`, `sampleRate`, `numberOfChannels`.
+   - Purely data — one clip can be shared by many `AudioSource`s.
+
+2. **`AudioListener.ts`** (extends `SceneNode`)
+   - Wraps the `AudioContext.listener` (an `AudioListener` on the Web Audio graph).
+   - `update()`: syncs `positionX/Y/Z`, `forwardX/Y/Z`, and `upX/Y/Z`
+     from its world-space transform every frame.
+   - Typically attached as a child of the active camera so it inherits camera movement.
+   - Only one listener can be active at a time.
+
+3. **`AudioSource.ts`** (extends `SceneNode`)
+   - Creates a `PannerNode` for 3D spatialization **or** a plain `GainNode` for
+     non-spatial playback (music / UI sounds).
+   - Properties: `clip`, `volume` (0–1), `loop`, `spatial` (boolean),
+     `refDistance`, `maxDistance`, `rolloffFactor`, `autoplay`.
+   - Methods: `play()`, `pause()`, `resume()`, `stop()`, `isPlaying()`.
+   - Distance model: `"inverse"` rolloff by default (configurable).
+   - Audio graph: `BufferSourceNode → PannerNode|GainNode → channelGain → masterGain → destination`.
+   - `update()`: syncs the `PannerNode` position from the node's world transform.
+
+4. **`AudioManager.ts`**
+   - Owns the single `AudioContext` (lazily created on the first user gesture
+     to comply with browser autoplay policy).
+   - Master volume via a `GainNode` at the end of the audio graph.
+   - **Channel groups**: `"sfx"`, `"music"`, `"ambient"` — each with its own
+     `GainNode` and independent volume (0–1).
+   - `resume()` / `suspend()` — respond to `document.visibilitychange` to
+     pause audio when the tab is hidden.
+   - `update(listener)`: called once per frame to sync the listener and all
+     registered sources.
+   - `createSource(options)`: factory that wires a new `AudioSource` into the
+     correct channel group.
+   - `decodeAudio(arrayBuffer): Promise<AudioClip>` — decodes raw bytes into
+     a playable `AudioClip`.
+
+5. **`AudioLoader.ts`**
+   - `load(url): Promise<AudioClip>` — fetches an audio file, decodes it
+     via `AudioManager.decodeAudio()`, and returns an `AudioClip`.
+   - Supports MP3, OGG, WAV (browser-dependent codec support).
+   - Integrates with `AssetManager` for deduplication and caching.
+
+6. **Engine integration**
+   - The demo creates an `AudioManager` and an `AudioListener` attached to the
+     camera.
+   - Each frame, `audioManager.update(listener)` is called after the camera
+     controller runs (world transforms must be up-to-date).
+   - `AudioSource` nodes are added to the scene like any other `SceneNode`;
+     their panner positions are synced automatically.
+
+7. **Demo scene**
+   - A looping spatial "hum" `AudioSource` attached to the particle emitter
+     position — volume fades as the player walks away.
+   - A non-spatial background music track on the `"music"` channel.
+   - On-screen UI slider for master volume and per-channel volumes.
+   - A one-shot "click" sound played on each physics collision (rate-limited).
+
+8. **Verify**
+   - Walk around the scene and hear the spatial hum pan left/right and attenuate.
+   - Toggle background music with a key press.
+   - Adjust master / SFX / music volumes via the settings panel.
+   - Confirm audio suspends when the tab loses focus and resumes on return.
+
+---
+
 ## Build & Run Commands
 
 ```bash
@@ -674,6 +757,7 @@ npm run lint
 | Rendering      | WebGL 2 (native, no wrapper libs)  |
 | Physics        | Custom rigid-body engine (Web Worker) |
 | Animation      | Custom skeletal + keyframe (built-in) |
+| Audio          | Web Audio API (spatial + mixing)       |
 | Build          | Webpack 5 + ts-loader, code-split    |
 | Testing        | Vitest                              |
 | Linting        | ESLint + @typescript-eslint         |
@@ -709,6 +793,7 @@ Phase 10 → Debug tools                 (developer experience)
 Phase 11 → Advanced rendering          (visual polish)
 Phase 12 → Optimization & production   (ship it)
 Phase 13 → Animation system            (bring scenes to life)
+Phase 14 → Audio system                (spatial sound & music)
 ```
 
-Each phase builds on the previous. Phases 1–5 get a visible, navigable 3D scene running. Phase 7 (physics) is the largest single effort and can be developed in parallel with Phases 5–6 since it only depends on the math library and scene sync.
+Each phase builds on the previous. Phases 1–5 get a visible, navigable 3D scene running. Phase 7 (physics) is the largest single effort and can be developed in parallel with Phases 5–6 since it only depends on the math library and scene sync. Phase 14 (audio) depends only on the scene graph and can be developed alongside any phase after Phase 4.
