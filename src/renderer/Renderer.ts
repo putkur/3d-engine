@@ -56,7 +56,7 @@ export class Renderer {
     }
   }
 
-  /** Draw elements from a VAO that has an index buffer set. */
+  /** Draw elements from a VAO that has an index buffer set. Auto-detects Uint16 vs Uint32 index type. */
   drawElements(vao: VertexArray, mode?: number): void {
     const gl = this.gl;
     const ib = vao.getIndexBuffer();
@@ -65,22 +65,11 @@ export class Renderer {
     }
 
     vao.bind();
-    gl.drawElements(mode ?? gl.TRIANGLES, ib.count, gl.UNSIGNED_SHORT, 0);
+    gl.drawElements(mode ?? gl.TRIANGLES, ib.count, ib.indexType, 0);
     vao.unbind();
 
     this.stats.drawCalls++;
     this.stats.triangles += ib.count / 3;
-  }
-
-  /** Draw elements using Uint32 indices (for meshes with >65k vertices). */
-  drawElements32(vao: VertexArray, count: number, mode?: number): void {
-    const gl = this.gl;
-    vao.bind();
-    gl.drawElements(mode ?? gl.TRIANGLES, count, gl.UNSIGNED_INT, 0);
-    vao.unbind();
-
-    this.stats.drawCalls++;
-    this.stats.triangles += count / 3;
   }
 
   /** Draw arrays (no index buffer). */

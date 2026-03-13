@@ -35,6 +35,7 @@ import { PhysicsWorkerHost } from './physics/PhysicsWorkerHost';
 import { AnimationClip } from './animation/AnimationClip';
 import { AnimationTrack, Interpolation } from './animation/AnimationTrack';
 import { AnimationMixer } from './animation/AnimationMixer';
+import { SkinnedMesh } from './animation/SkinnedMesh';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -378,11 +379,6 @@ robotRoot.transform.setPosition(-5, 0.9, 0);
 
 // Add all meshes to the scene so the renderer sees them
 scene.add(robotRoot);
-// The SceneNode children (joints) holding meshes aren't added to scene's flat
-// mesh list automatically — we traverse and add each Mesh directly:
-robotRoot.traverse(node => {
-  if ((node as Mesh).isMesh) scene.add(node as Mesh);
-});
 
 // -----------------------------------------------------------------------
 // Animation clips — created purely from keyframe data (no glTF needed)
@@ -733,13 +729,16 @@ engine.on('update', (dt: number) => {
   particles.update(dt);
   // Phase 13 — advance robot animation mixer
   robotMixer.update(dt);
+  // Update world matrices immediately after animation so transforms are current
+  scene.updateMatrixWorld();
 });
 
 engine.on('render', () => {
   // Update camera controller
   controller.update(engine.clock.getDelta());
 
-  // Update all world matrices (includes camera)
+  // World matrices already updated in 'update' event (after animation);
+  // re-run only for camera changes this frame.
   scene.updateMatrixWorld();
 
   // --- Shadow pass ---
@@ -781,7 +780,11 @@ engine.on('render', () => {
 
   for (const { mesh } of renderQueue.items) {
 
-    const vao = mesh.ensureGPUBuffers(gl);
+    // SkinnedMesh: use skin VAO and upload joint matrices
+    const isSkinned = mesh instanceof SkinnedMesh && (mesh as SkinnedMesh).skeleton;
+    const vao = isSkinned
+      ? (mesh as SkinnedMesh).ensureSkinVAO(gl)
+      : mesh.ensureGPUBuffers(gl);
 
     mesh.material.bind(gl);
     const shader = mesh.material.shader;
@@ -814,6 +817,16 @@ engine.on('render', () => {
     shader.setFloat('u_shadowBias', 0.001);
     shadowMap.depthTexture.bind(4);
     shader.setInt('u_shadowMap', 4);
+
+    // Upload joint matrices for skinned meshes
+    if (isSkinned) {
+      const sm = mesh as SkinnedMesh;
+      sm.skeleton!.update();
+      const jointLoc = shader.getUniformLocation('u_jointMatrices');
+      if (jointLoc) {
+        gl.uniformMatrix4fv(jointLoc, false, sm.skeleton!.jointMatrices);
+      }
+    }
 
     renderer.drawElements(vao);
   }

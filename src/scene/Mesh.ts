@@ -17,10 +17,10 @@ export class Mesh extends SceneNode {
   public material: Material;
 
   // GPU resources (created lazily)
-  private vao: VertexArray | null = null;
-  private vbo: VertexBuffer | null = null;
-  private ibo: IndexBuffer | null = null;
-  private gpuDirty = true;
+  protected vao: VertexArray | null = null;
+  protected vbo: VertexBuffer | null = null;
+  protected ibo: IndexBuffer | null = null;
+  protected gpuDirty = true;
 
   constructor(geometry: Geometry, material: Material, name = '') {
     super(name);

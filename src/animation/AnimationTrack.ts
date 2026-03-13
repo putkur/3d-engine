@@ -180,10 +180,11 @@ export class AnimationTrack {
     // inTangent = values[idx*stride + 0..c-1]
     // value     = values[idx*stride + c..2c-1]
     // outTangent= values[idx*stride + 2c..3c-1]
-    const p0 = Array.from(this.values.subarray(lo * stride + c,     lo * stride + c * 2));
-    const m0 = Array.from(this.values.subarray(lo * stride + c * 2, lo * stride + c * 3));
-    const p1 = Array.from(this.values.subarray(hi * stride + c,     hi * stride + c * 2));
-    const m1 = Array.from(this.values.subarray(hi * stride,         hi * stride + c));
+    // glTF CUBICSPLINE layout per keyframe: [inTangent(c), value(c), outTangent(c)]
+    const p0 = Array.from(this.values.subarray(lo * stride + c,       lo * stride + c * 2));  // value at lo
+    const m0 = Array.from(this.values.subarray(lo * stride + c * 2,   lo * stride + c * 3));  // outTangent at lo
+    const p1 = Array.from(this.values.subarray(hi * stride + c,       hi * stride + c * 2));  // value at hi
+    const m1 = Array.from(this.values.subarray(hi * stride,           hi * stride + c));       // inTangent at hi
 
     // Cubic Hermite
     const t2 = t * t;

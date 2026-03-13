@@ -3,7 +3,6 @@ import { Geometry } from '../scene/Geometry';
 import { Material } from '../scene/Material';
 import { Skeleton } from './Skeleton';
 import { VertexBuffer, BufferUsage } from '../renderer/VertexBuffer';
-import { IndexBuffer } from '../renderer/IndexBuffer';
 import { VertexArray } from '../renderer/VertexArray';
 
 /**
@@ -38,6 +37,9 @@ export class SkinnedMesh extends Mesh {
    * Build (or rebuild) a VAO that includes the base mesh attributes
    * (position, normal, uv) plus the skinning attributes (joints, weights).
    *
+   * Reuses the base VBO/IBO created by Mesh.ensureGPUBuffers() and adds
+   * separate VBOs for joints (location 4) and weights (location 5).
+   *
    * Returns the skinning VAO when skinning data is available, otherwise
    * falls back to the base VAO from Mesh.ensureGPUBuffers().
    */
@@ -47,14 +49,14 @@ export class SkinnedMesh extends Mesh {
       return this.ensureGPUBuffers(gl);
     }
 
-    // Re-use base VAO — we'll rebuild only the skinning VBOs
-    const baseVAO = this.ensureGPUBuffers(gl);
+    // Ensure base VBO/IBO exist (created lazily by parent)
+    this.ensureGPUBuffers(gl);
 
     if (!this.skinnedVAODirty && this.skinnedVAO) {
       return this.skinnedVAO;
     }
 
-    // Destroy old skinning buffers
+    // Destroy old skinning-specific resources
     this.jointsVBO?.destroy();
     this.weightsVBO?.destroy();
     this.skinnedVAO?.destroy();
@@ -63,60 +65,16 @@ export class SkinnedMesh extends Mesh {
     this.jointsVBO  = new VertexBuffer(gl, this.jointsData,  BufferUsage.STATIC);
     this.weightsVBO = new VertexBuffer(gl, this.weightsData, BufferUsage.STATIC);
 
-    // Create a new VAO that also binds the skinning attributes.
-    // We copy the base VAO bindings by re-running ensureGPUBuffers (already done above)
-    // and then add the skin buffers.
+    // Build a new VAO that combines the base VBO with the skin VBOs
     const FLOAT = 4;
-    const vao = new VertexArray(gl);
-    const ibo = baseVAO.getIndexBuffer();
-    if (ibo) vao.setIndexBuffer(ibo);
-
-    // Bind base attributes through the existing base VBO
-    // (We replicate the layout from Mesh.ensureGPUBuffers):
     const geo = this.geometry;
     const hasTangents = geo.tangents !== null;
     const vertexSize = hasTangents ? 12 : 8;
     const stride = vertexSize * FLOAT;
 
-    // We need to pull the base VBO handle out — since Mesh keeps vbo private
-    // we re-upload (already in GPU, this is a quick path via the base ensureGPUBuffers).
-    // Actually, a cleaner approach: build the combined VAO from scratch.
-    // We re-create the interleaved base buffer part via Mesh.ensureGPUBuffers and
-    // track the extra attribs on top.
+    const vao = new VertexArray(gl);
 
-    // Add joints at location 4: 4 floats per vertex (uvec4 uploaded as float)
-    vao.addVertexBuffer(this.jointsVBO, [
-      { location: 4, size: 4, type: gl.FLOAT, stride: 0, offset: 0 },
-    ]);
-    // Add weights at location 5: 4 floats per vertex
-    vao.addVertexBuffer(this.weightsVBO, [
-      { location: 5, size: 4, stride: 0, offset: 0 },
-    ]);
-
-    // For the base geometry we borrow from the base VAO's VBO.
-    // Since we can't easily extract VBO from Mesh (it's private), use a different
-    // strategy: re-create the interleaved base data and attach it to the new vao.
-    const vertCount = geo.vertexCount;
-    const interleaved = new Float32Array(vertCount * vertexSize);
-    for (let i = 0; i < vertCount; i++) {
-      const off = i * vertexSize;
-      interleaved[off]   = geo.positions[i * 3];
-      interleaved[off+1] = geo.positions[i * 3 + 1];
-      interleaved[off+2] = geo.positions[i * 3 + 2];
-      interleaved[off+3] = geo.normals[i * 3];
-      interleaved[off+4] = geo.normals[i * 3 + 1];
-      interleaved[off+5] = geo.normals[i * 3 + 2];
-      interleaved[off+6] = geo.uvs[i * 2];
-      interleaved[off+7] = geo.uvs[i * 2 + 1];
-      if (hasTangents && geo.tangents) {
-        interleaved[off+8]  = geo.tangents[i * 4];
-        interleaved[off+9]  = geo.tangents[i * 4 + 1];
-        interleaved[off+10] = geo.tangents[i * 4 + 2];
-        interleaved[off+11] = geo.tangents[i * 4 + 3];
-      }
-    }
-
-    const baseVBO = new VertexBuffer(gl, interleaved, BufferUsage.STATIC);
+    // Reuse the base VBO (already uploaded by ensureGPUBuffers)
     const baseAttribs = [
       { location: 0, size: 3, stride, offset: 0 },
       { location: 1, size: 3, stride, offset: 3 * FLOAT },
@@ -125,11 +83,19 @@ export class SkinnedMesh extends Mesh {
     if (hasTangents) {
       baseAttribs.push({ location: 3, size: 4, stride, offset: 8 * FLOAT });
     }
-    vao.addVertexBuffer(baseVBO, baseAttribs);
+    vao.addVertexBuffer(this.vbo!, baseAttribs);
 
-    // Index buffer
-    const newIBO = new IndexBuffer(gl, geo.indices, BufferUsage.STATIC);
-    vao.setIndexBuffer(newIBO);
+    // Add joints at location 4: 4 floats per vertex
+    vao.addVertexBuffer(this.jointsVBO, [
+      { location: 4, size: 4, type: gl.FLOAT, stride: 0, offset: 0 },
+    ]);
+    // Add weights at location 5: 4 floats per vertex
+    vao.addVertexBuffer(this.weightsVBO, [
+      { location: 5, size: 4, stride: 0, offset: 0 },
+    ]);
+
+    // Reuse the base IBO
+    vao.setIndexBuffer(this.ibo!);
 
     this.skinnedVAO = vao;
     this.skinnedVAODirty = false;

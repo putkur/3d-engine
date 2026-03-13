@@ -682,7 +682,7 @@ export class GLTFLoader {
       : new Material(defaultShader);
 
     // Skinning data
-    if (useSkinned && (attrs['JOINTS_0'] !== undefined || attrs['WEIGHTS_0'] !== undefined)) {
+    if (useSkinned && attrs['JOINTS_0'] !== undefined && attrs['WEIGHTS_0'] !== undefined) {
       const skinned = new SkinnedMesh(geometry, material);
 
       if (attrs['JOINTS_0'] !== undefined) {
@@ -774,6 +774,7 @@ export class GLTFLoader {
       const tracks: AnimationTrack[] = [];
 
       for (const channel of animDef.channels) {
+        if (channel.sampler < 0 || channel.sampler >= animDef.samplers.length) continue;
         const samplerDef = animDef.samplers[channel.sampler];
         const targetNodeIdx = channel.target.node;
         const targetNode = allNodes[targetNodeIdx];

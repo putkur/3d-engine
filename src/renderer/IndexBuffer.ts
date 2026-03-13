@@ -3,11 +3,14 @@ import { BufferUsage } from './VertexBuffer';
 export class IndexBuffer {
   public readonly handle: WebGLBuffer;
   public readonly count: number;
+  /** GL index type: gl.UNSIGNED_SHORT (Uint16) or gl.UNSIGNED_INT (Uint32). */
+  public readonly indexType: number;
   private readonly gl: WebGL2RenderingContext;
 
   constructor(gl: WebGL2RenderingContext, data: Uint16Array | Uint32Array, usage: BufferUsage = BufferUsage.STATIC) {
     this.gl = gl;
     this.count = data.length;
+    this.indexType = data instanceof Uint32Array ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
 
     const handle = gl.createBuffer();
     if (!handle) {

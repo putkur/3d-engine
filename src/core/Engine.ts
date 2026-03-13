@@ -46,6 +46,8 @@ export class Engine extends EventEmitter {
 
   init(): void {
     this.resizeCanvas();
+    // Remove any previous listener to prevent duplicates if init() is called twice
+    window.removeEventListener('resize', this.onResize);
     window.addEventListener('resize', this.onResize);
 
     const gl = this.gl;
