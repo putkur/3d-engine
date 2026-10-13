@@ -73,18 +73,23 @@ export class CockpitHUD {
 
     const w = width / dpr;
     const h = height / dpr;
-    const cx = w * 0.5;
+
+    // Keep HUD inside a centered 16:9-safe region while allowing wider 3D render.
+    const uiWidth = Math.min(w, h * (16 / 9));
+    const uiLeft = (w - uiWidth) * 0.5;
+
+    const cx = uiLeft + uiWidth * 0.5;
     const cy = h * 0.5;
 
     this.drawReticle(ctx, cx, cy, state);
-    this.drawThrottleTape(ctx, w * 0.11, h * 0.2, h * 0.6, state.throttle, state.throttleTarget);
-    this.drawSpeedTape(ctx, w * 0.89, h * 0.2, h * 0.6, state.speed);
-    this.drawModeBadges(ctx, w, h, state);
+    this.drawThrottleTape(ctx, uiLeft + uiWidth * 0.11, h * 0.2, h * 0.6, state.throttle, state.throttleTarget);
+    this.drawSpeedTape(ctx, uiLeft + uiWidth * 0.89, h * 0.2, h * 0.6, state.speed);
+    this.drawModeBadges(ctx, uiLeft, uiWidth, h, state);
     if (combat) {
-      this.drawCombat(ctx, w, h, combat);
+      this.drawCombat(ctx, uiLeft, uiWidth, h, combat);
     }
     if (indicators && indicators.length > 0) {
-      this.drawEnemyIndicators(ctx, w, h, indicators);
+      this.drawEnemyIndicators(ctx, uiLeft, uiWidth, h, indicators);
     }
 
     ctx.restore();
@@ -186,8 +191,8 @@ export class CockpitHUD {
     ctx.fillText('m/s', x, y + height * 0.5 + 24);
   }
 
-  private drawModeBadges(ctx: CanvasRenderingContext2D, w: number, h: number, state: ShipHudState): void {
-    const left = w * 0.5 - 180;
+  private drawModeBadges(ctx: CanvasRenderingContext2D, uiLeft: number, uiWidth: number, h: number, state: ShipHudState): void {
+    const left = uiLeft + uiWidth * 0.5 - 180;
     const top = h * 0.12;
 
     this.badge(ctx, left, top, 100, 28, `FA ${state.flightAssist ? 'ON' : 'OFF'}`, state.flightAssist);
@@ -198,15 +203,15 @@ export class CockpitHUD {
     ctx.textAlign = 'center';
     ctx.fillText(
       `P ${state.pitchRate.toFixed(0)}  Y ${state.yawRate.toFixed(0)}  R ${state.rollRate.toFixed(0)} deg/s`,
-      w * 0.5,
+      uiLeft + uiWidth * 0.5,
       top + 46,
     );
   }
 
-  private drawCombat(ctx: CanvasRenderingContext2D, w: number, h: number, combat: CockpitCombatHudState): void {
+  private drawCombat(ctx: CanvasRenderingContext2D, uiLeft: number, uiWidth: number, h: number, combat: CockpitCombatHudState): void {
     const panelW = 250;
     const panelH = 98;
-    const x = w * 0.5 - panelW * 0.5;
+    const x = uiLeft + uiWidth * 0.5 - panelW * 0.5;
     const y = h * 0.81;
 
     this.panel(ctx, x, y, panelW, panelH);
@@ -250,7 +255,7 @@ export class CockpitHUD {
     if (combat.hitConfirm > 0) {
       ctx.strokeStyle = 'rgba(255, 240, 120, 0.95)';
       ctx.lineWidth = 2;
-      const cx = w * 0.5;
+      const cx = uiLeft + uiWidth * 0.5;
       const cy = h * 0.5;
       this.line(ctx, cx - 10, cy - 10, cx - 2, cy - 2);
       this.line(ctx, cx + 10, cy - 10, cx + 2, cy - 2);
@@ -261,13 +266,14 @@ export class CockpitHUD {
 
   private drawEnemyIndicators(
     ctx: CanvasRenderingContext2D,
-    w: number,
+    uiLeft: number,
+    uiWidth: number,
     h: number,
     indicators: OffscreenEnemyIndicator[],
   ): void {
-    const radiusX = w * 0.44;
+    const radiusX = uiWidth * 0.44;
     const radiusY = h * 0.44;
-    const cx = w * 0.5;
+    const cx = uiLeft + uiWidth * 0.5;
     const cy = h * 0.5;
 
     for (const ind of indicators) {

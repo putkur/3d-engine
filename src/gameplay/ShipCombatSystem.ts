@@ -1,5 +1,6 @@
 import { InputManager } from '../input/InputManager';
 import { ShaderProgram } from '../renderer/ShaderProgram';
+import { Quaternion } from '../math/Quaternion';
 import { Vector3 } from '../math/Vector3';
 import { Scene } from '../scene/Scene';
 import { Geometry } from '../scene/Geometry';
@@ -41,6 +42,7 @@ export interface EnemyTrackTarget {
 interface EnemyShip {
   mesh: Mesh;
   material: Material;
+  noseMaterial: Material;
   halfExtents: Vector3;
   maxShield: number;
   shield: number;
@@ -82,6 +84,8 @@ export class ShipCombatSystem {
 
   private readonly projectileGeo: Geometry;
   private readonly enemyGeo: Geometry;
+  private readonly enemyNoseGeo: Geometry;
+  private readonly enemyFinGeo: Geometry;
 
   private readonly projectiles: Projectile[] = [];
   private readonly enemies: EnemyShip[] = [];
@@ -113,6 +117,8 @@ export class ShipCombatSystem {
 
     this.projectileGeo = Geometry.createSphere(0.09, 10, 8);
     this.enemyGeo = Geometry.createBox(1.4, 0.5, 1.8);
+    this.enemyNoseGeo = Geometry.createBox(0.22, 0.14, 0.52);
+    this.enemyFinGeo = Geometry.createBox(0.08, 0.12, 0.5);
 
     this.aimOrigin = shipBody.position.clone();
     this.aimDirection = shipBody.rotation.rotateVector(Vector3.forward()).normalizeSelf();
@@ -346,10 +352,18 @@ export class ShipCombatSystem {
         .add(new Vector3(0, verticalSpeed, 0));
 
       enemyPos.addSelf(desiredVelocity.scale(dt));
+
+      // Steer the enemy nose toward the player with smooth turning.
+      const desiredRotation = Quaternion.lookRotation(toShipDir);
+      const currentRotation = enemy.mesh.transform.rotation;
+      enemy.mesh.transform.rotation = currentRotation.slerp(desiredRotation, Math.min(1, dt * 2.4));
       enemy.mesh.transform.markDirty();
 
+      const facingForward = enemy.mesh.transform.rotation.rotateVector(Vector3.forward()).normalizeSelf();
+      const facingDot = facingForward.dot(toShipDir);
+
       enemy.attackCooldown -= dt;
-      if (enemy.attackCooldown <= 0 && dist < 68) {
+      if (enemy.attackCooldown <= 0 && dist < 68 && facingDot > 0.92) {
         this.fireEnemy(enemy);
         enemy.attackCooldown = this.opts.enemyFireCooldown + Math.random() * 0.45;
       }
@@ -365,6 +379,13 @@ export class ShipCombatSystem {
         Math.min(1, baseR + flash),
         Math.min(1, baseG + flash * 0.4),
         Math.min(1, baseB + flash * 0.2),
+        1.0,
+      ];
+
+      enemy.noseMaterial.color = [
+        1.0,
+        Math.min(1.0, 0.24 + flash * 0.8),
+        Math.min(1.0, 0.2 + flash * 0.6),
         1.0,
       ];
     }
@@ -388,11 +409,33 @@ export class ShipCombatSystem {
       });
       const mesh = new Mesh(this.enemyGeo, material, `enemy-${i}`);
       mesh.transform.setPosition(p[0], p[1], p[2]);
+
+      const noseMaterial = new Material(shader, {
+        color: [1.0, 0.24, 0.2, 1.0],
+        specular: 0.04,
+        shininess: 2,
+        cullFace: false,
+      });
+      const noseMesh = new Mesh(this.enemyNoseGeo, noseMaterial, `enemy-${i}-nose`);
+      noseMesh.transform.setPosition(0, 0, -1.05);
+      mesh.add(noseMesh);
+
+      const finL = new Mesh(this.enemyFinGeo, noseMaterial, `enemy-${i}-finL`);
+      finL.transform.setPosition(-0.34, 0, -0.84);
+      finL.transform.setRotationFromEuler(0, 8, 0);
+      mesh.add(finL);
+
+      const finR = new Mesh(this.enemyFinGeo, noseMaterial, `enemy-${i}-finR`);
+      finR.transform.setPosition(0.34, 0, -0.84);
+      finR.transform.setRotationFromEuler(0, -8, 0);
+      mesh.add(finR);
+
       this.scene.add(mesh);
 
       this.enemies.push({
         mesh,
         material,
+        noseMaterial,
         halfExtents: new Vector3(0.7, 0.25, 0.9),
         maxShield: 100,
         shield: 100,
