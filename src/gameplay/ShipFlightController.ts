@@ -12,6 +12,8 @@ export interface ShipFlightControllerOptions {
   acceleration?: number;
   brakeDamping?: number;
   lateralDamping?: number;
+  strafeResponse?: number;
+  strafeDriftDamping?: number;
   throttleChangeRate?: number;
   throttleSmoothing?: number;
   angularResponse?: number;
@@ -42,6 +44,8 @@ const DEFAULTS: Required<ShipFlightControllerOptions> = {
   acceleration: 30,
   brakeDamping: 2.8,
   lateralDamping: 3.8,
+  strafeResponse: 7.2,
+  strafeDriftDamping: 1.35,
   throttleChangeRate: 0.85,
   throttleSmoothing: 3.2,
   angularResponse: 8.5,
@@ -97,9 +101,10 @@ export class ShipFlightController {
     const mouseYaw = mouse.locked ? clamp(-mouse.deltaX * this.opts.lookSensitivity, -3, 3) : 0;
     const mousePitch = mouse.locked ? clamp(-mouse.deltaY * this.opts.lookSensitivity, -3, 3) : 0;
 
-    const keyYaw = (kb.isDown('KeyA') || kb.isDown('ArrowLeft') ? 1 : 0) - (kb.isDown('KeyD') || kb.isDown('ArrowRight') ? 1 : 0);
+    const keyYaw = (kb.isDown('ArrowLeft') ? 1 : 0) - (kb.isDown('ArrowRight') ? 1 : 0);
     const keyPitch = (kb.isDown('ArrowUp') ? 1 : 0) - (kb.isDown('ArrowDown') ? 1 : 0);
     const keyRoll = (kb.isDown('KeyE') ? 1 : 0) - (kb.isDown('KeyQ') ? 1 : 0);
+    const strafeInput = (kb.isDown('KeyD') ? 1 : 0) - (kb.isDown('KeyA') ? 1 : 0);
 
     const yawInput = clamp(mouseYaw + keyYaw * 0.85, -3, 3);
     const pitchInput = clamp(mousePitch + keyPitch * 0.85, -3, 3);
@@ -124,6 +129,9 @@ export class ShipFlightController {
     const brakeHeld = kb.isDown('ControlLeft') || kb.isDown('ControlRight');
 
     const forward = this.orientation.rotateVector(Vector3.forward()).normalizeSelf();
+    const right = this.orientation.rotateVector(Vector3.right()).normalizeSelf();
+    const maxStrafeSpeed = this.opts.maxForwardSpeed * 0.33;
+    const strafeSpeedTarget = strafeInput * maxStrafeSpeed;
     const forwardSpeedTargetBase =
       this.throttle >= 0
         ? this.throttle * this.opts.maxForwardSpeed
@@ -141,14 +149,26 @@ export class ShipFlightController {
         dt,
       );
 
+      const currentStrafeSpeed = this.body.linearVelocity.dot(right);
+      const correctedStrafeSpeed = dampedTo(
+        currentStrafeSpeed,
+        strafeSpeedTarget,
+        this.opts.strafeResponse,
+        dt,
+      );
+
       const forwardVelocity = forward.scale(correctedForwardSpeed);
-      const lateralVelocity = this.body.linearVelocity.subtract(forward.scale(currentForwardSpeed));
-      const lateralDecay = Math.max(0, 1 - this.opts.lateralDamping * dt);
+      const strafeVelocity = right.scale(correctedStrafeSpeed);
+      const lateralVelocity = this.body.linearVelocity
+        .subtract(forward.scale(currentForwardSpeed))
+        .subtract(right.scale(currentStrafeSpeed));
+      const lateralDecay = Math.max(0, 1 - this.opts.strafeDriftDamping * dt);
       lateralVelocity.scaleSelf(lateralDecay);
 
-      this.body.linearVelocity.copy(forwardVelocity.add(lateralVelocity));
+      this.body.linearVelocity.copy(forwardVelocity.add(strafeVelocity).add(lateralVelocity));
     } else {
       this.body.linearVelocity.addSelf(forward.scale(forwardSpeedTarget * 0.55 * dt));
+      this.body.linearVelocity.addSelf(right.scale(strafeSpeedTarget * 0.55 * dt));
     }
 
     if (brakeHeld) {

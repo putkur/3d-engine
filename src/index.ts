@@ -127,3 +127,6 @@ export { AudioLoader } from './audio/AudioLoader';
 export { ShipFlightController } from './gameplay/ShipFlightController';
 export type { ShipFlightControllerOptions, ShipHudState } from './gameplay/ShipFlightController';
 export { CockpitHUD } from './gameplay/CockpitHUD';
+export type { CockpitCombatHudState, OffscreenEnemyIndicator } from './gameplay/CockpitHUD';
+export { ShipCombatSystem } from './gameplay/ShipCombatSystem';
+export type { ShipCombatOptions, CombatHudState, EnemyTrackTarget } from './gameplay/ShipCombatSystem';

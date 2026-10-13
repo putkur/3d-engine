@@ -1,6 +1,26 @@
 import { clamp } from '../math/MathUtils';
 import type { ShipHudState } from './ShipFlightController';
 
+export interface CockpitCombatHudState {
+  weaponReady: boolean;
+  cooldown01: number;
+  cooldownMs: number;
+  projectiles: number;
+  enemiesAlive: number;
+  targetShield01: number;
+  targetHull01: number;
+  hitConfirm: number;
+  playerShield01: number;
+  playerHull01: number;
+  incomingHit: number;
+}
+
+export interface OffscreenEnemyIndicator {
+  nx: number;
+  ny: number;
+  behind: boolean;
+}
+
 export class CockpitHUD {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -35,7 +55,11 @@ export class CockpitHUD {
     this.canvas.height = height;
   }
 
-  render(state: ShipHudState): void {
+  render(
+    state: ShipHudState,
+    combat?: CockpitCombatHudState,
+    indicators?: OffscreenEnemyIndicator[],
+  ): void {
     const ctx = this.ctx;
     const width = this.canvas.width;
     const height = this.canvas.height;
@@ -50,12 +74,18 @@ export class CockpitHUD {
     const w = width / dpr;
     const h = height / dpr;
     const cx = w * 0.5;
-    const cy = h * 0.52;
+    const cy = h * 0.5;
 
     this.drawReticle(ctx, cx, cy, state);
     this.drawThrottleTape(ctx, w * 0.11, h * 0.2, h * 0.6, state.throttle, state.throttleTarget);
     this.drawSpeedTape(ctx, w * 0.89, h * 0.2, h * 0.6, state.speed);
     this.drawModeBadges(ctx, w, h, state);
+    if (combat) {
+      this.drawCombat(ctx, w, h, combat);
+    }
+    if (indicators && indicators.length > 0) {
+      this.drawEnemyIndicators(ctx, w, h, indicators);
+    }
 
     ctx.restore();
   }
@@ -171,6 +201,107 @@ export class CockpitHUD {
       w * 0.5,
       top + 46,
     );
+  }
+
+  private drawCombat(ctx: CanvasRenderingContext2D, w: number, h: number, combat: CockpitCombatHudState): void {
+    const panelW = 250;
+    const panelH = 98;
+    const x = w * 0.5 - panelW * 0.5;
+    const y = h * 0.81;
+
+    this.panel(ctx, x, y, panelW, panelH);
+
+    const weaponText = combat.weaponReady ? 'PRIMARY READY' : `PRIMARY CD ${Math.ceil(combat.cooldownMs)}ms`;
+    ctx.fillStyle = combat.weaponReady ? 'rgba(165, 255, 190, 0.95)' : 'rgba(255, 215, 130, 0.95)';
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(weaponText, x + 10, y + 18);
+
+    const barX = x + 10;
+    const barY = y + 26;
+    const barW = panelW - 20;
+    const barH = 10;
+    ctx.strokeStyle = 'rgba(120, 255, 225, 0.6)';
+    ctx.strokeRect(barX, barY, barW, barH);
+    ctx.fillStyle = 'rgba(120, 255, 225, 0.5)';
+    ctx.fillRect(barX + 1, barY + 1, (1 - clamp(combat.cooldown01, 0, 1)) * (barW - 2), barH - 2);
+
+    const targetShield = Math.round(clamp(combat.targetShield01, 0, 1) * 100);
+    const targetHull = Math.round(clamp(combat.targetHull01, 0, 1) * 100);
+    ctx.fillStyle = 'rgba(170, 240, 255, 0.9)';
+    ctx.fillText(`TARGET SHD ${targetShield}%  HULL ${targetHull}%`, x + 10, y + 51);
+
+    const playerShield = Math.round(clamp(combat.playerShield01, 0, 1) * 100);
+    const playerHull = Math.round(clamp(combat.playerHull01, 0, 1) * 100);
+    ctx.fillStyle = 'rgba(255, 210, 170, 0.9)';
+    ctx.fillText(`PLAYER SHD ${playerShield}%  HULL ${playerHull}%`, x + 10, y + 67);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(205, 255, 245, 0.9)';
+    ctx.fillText(`ENM ${combat.enemiesAlive}  RND ${combat.projectiles}`, x + panelW - 10, y + 18);
+
+    if (combat.incomingHit > 0) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255, 120, 120, 0.95)';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText('INCOMING HIT', x + panelW * 0.5, y + 85);
+    }
+
+    if (combat.hitConfirm > 0) {
+      ctx.strokeStyle = 'rgba(255, 240, 120, 0.95)';
+      ctx.lineWidth = 2;
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+      this.line(ctx, cx - 10, cy - 10, cx - 2, cy - 2);
+      this.line(ctx, cx + 10, cy - 10, cx + 2, cy - 2);
+      this.line(ctx, cx - 10, cy + 10, cx - 2, cy + 2);
+      this.line(ctx, cx + 10, cy + 10, cx + 2, cy + 2);
+    }
+  }
+
+  private drawEnemyIndicators(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    indicators: OffscreenEnemyIndicator[],
+  ): void {
+    const radiusX = w * 0.44;
+    const radiusY = h * 0.44;
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+
+    for (const ind of indicators) {
+      const x = cx + clamp(ind.nx, -1, 1) * radiusX;
+      const y = cy - clamp(ind.ny, -1, 1) * radiusY;
+
+      const toCenterX = cx - x;
+      const toCenterY = cy - y;
+      const angle = Math.atan2(toCenterY, toCenterX);
+
+      // Arrow points toward center (toward target direction from edge marker).
+      const size = ind.behind ? 7 : 9;
+      const color = ind.behind ? 'rgba(255, 170, 100, 0.88)' : 'rgba(255, 95, 95, 0.95)';
+      ctx.fillStyle = color;
+      ctx.strokeStyle = 'rgba(15, 25, 25, 0.65)';
+      ctx.lineWidth = 1;
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(size, 0);
+      ctx.lineTo(-size * 0.75, size * 0.65);
+      ctx.lineTo(-size * 0.75, -size * 0.65);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.fillStyle = ind.behind ? 'rgba(255, 210, 120, 0.95)' : 'rgba(255, 120, 120, 0.9)';
+      ctx.arc(-size * 1.45, 0, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   private badge(

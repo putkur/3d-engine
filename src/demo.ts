@@ -39,7 +39,8 @@ import { AudioListener } from './audio/AudioListener';
 import { AudioClip } from './audio/AudioClip';
 import { AudioSource } from './audio/AudioSource';
 import { ShipFlightController } from './gameplay/ShipFlightController';
-import { CockpitHUD } from './gameplay/CockpitHUD';
+import { CockpitHUD, OffscreenEnemyIndicator } from './gameplay/CockpitHUD';
+import { ShipCombatSystem } from './gameplay/ShipCombatSystem';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -280,6 +281,14 @@ const shipController = new ShipFlightController(engine.input, shipBody, {
 });
 
 const cockpitHud = new CockpitHUD();
+const combatSystem = new ShipCombatSystem(engine.input, scene, program, shipBody, {
+  fireCooldown: 0.11,
+  projectileSpeed: 220,
+  projectileLifetime: 2.3,
+  shieldDamage: 30,
+  hullDamage: 14,
+  enemyProjectileSpeed: 95,
+});
 
 // Click canvas to lock pointer for mouse look
 engine.canvas.addEventListener('click', () => {
@@ -687,6 +696,16 @@ audioLabel.innerHTML =
   'Walk near particles (-3, 1, -2) to hear spatial hum';
 document.body.appendChild(audioLabel);
 
+const combatLabel = document.createElement('div');
+combatLabel.style.cssText =
+  'position:fixed;bottom:86px;left:8px;background:rgba(0,0,0,0.65);color:#fff;' +
+  'padding:8px 12px;border-radius:6px;font:12px monospace;z-index:1000;';
+combatLabel.innerHTML =
+  '<b>Combat</b><br>' +
+  'Hold <b>LMB</b> or <b>Space</b> to fire primary<br>' +
+  'Destroy enemy ships ahead to test shields/hull';
+document.body.appendChild(combatLabel);
+
 // --- Phase 12: Frustum culling, BVH, Render queue ---
 const frustum      = new Frustum();
 const bvh          = new BVH();
@@ -849,10 +868,19 @@ engine.on('fixedUpdate', (fixedDt: number) => {
 // --- Per-frame stats & inspector ---
 engine.on('update', (dt: number) => {
   shipController.update(dt);
+
+  // Ensure camera world transform is current before deriving crosshair aim ray.
+  scene.updateMatrixWorld();
+  const aimOrigin = camera.transform.worldMatrix.getTranslation();
+  const aimDirection = camera.transform.getForward().normalizeSelf();
+  combatSystem.setAimRay(aimOrigin, aimDirection);
+
+  combatSystem.update(dt);
   stats.update(dt);
   inspector.update(dt);
   particles.update(dt);
-  cockpitHud.render(shipController.getHudState());
+  const indicators = buildOffscreenEnemyIndicators(camera, combatSystem.getEnemyTrackingTargets());
+  cockpitHud.render(shipController.getHudState(), combatSystem.getHudState(), indicators);
   // Phase 13 — advance robot animation mixer
   robotMixer.update(dt);
   // Update world matrices immediately after animation so transforms are current
@@ -860,6 +888,55 @@ engine.on('update', (dt: number) => {
   // Phase 14 — sync audio listener + source positions
   audioManager.update(audioListener);
 });
+
+function buildOffscreenEnemyIndicators(
+  cam: PerspectiveCamera,
+  targets: Array<{ x: number; y: number; z: number }>,
+): OffscreenEnemyIndicator[] {
+  const markers: OffscreenEnemyIndicator[] = [];
+  const camPos = cam.transform.worldMatrix.getTranslation();
+  const forward = cam.transform.getForward().normalizeSelf();
+  const right = cam.transform.getRight().normalizeSelf();
+  const up = cam.transform.getUp().normalizeSelf();
+
+  const tanHalfV = Math.tan((cam.fov * Math.PI / 180) * 0.5);
+  const tanHalfH = tanHalfV * cam.aspect;
+  const edge = 0.88;
+
+  for (const t of targets) {
+    const toTarget = new Vector3(t.x - camPos.x, t.y - camPos.y, t.z - camPos.z);
+    const z = toTarget.dot(forward);
+    const x = toTarget.dot(right);
+    const y = toTarget.dot(up);
+
+    let nx = 0;
+    let ny = 0;
+    let behind = false;
+
+    if (z > 0.001) {
+      nx = x / (z * tanHalfH);
+      ny = y / (z * tanHalfV);
+      if (Math.abs(nx) <= 1 && Math.abs(ny) <= 1) {
+        continue;
+      }
+    } else {
+      // Behind the player: invert lateral direction for edge marker placement.
+      const lateralLen = Math.max(1e-6, Math.hypot(x, y));
+      nx = -x / lateralLen;
+      ny = -y / lateralLen;
+      behind = true;
+    }
+
+    const inv = edge / Math.max(1e-6, Math.max(Math.abs(nx), Math.abs(ny)));
+    markers.push({
+      nx: nx * inv,
+      ny: ny * inv,
+      behind,
+    });
+  }
+
+  return markers;
+}
 
 engine.on('render', () => {
   // World matrices already updated in 'update' event (after animation);
