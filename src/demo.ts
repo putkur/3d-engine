@@ -83,6 +83,15 @@ const combatSystem = new ShipCombatSystem(engine.input, scene, program, shipBody
   enemyProjectileSpeed: 95,
 });
 
+let sfxContext: AudioContext | null = null;
+let lastHitConfirm = 0;
+let lastIncomingHit = 0;
+let lastEnemiesAlive = Number.POSITIVE_INFINITY;
+
+let engineOsc: OscillatorNode | null = null;
+let engineGain: GainNode | null = null;
+let engineFilter: BiquadFilterNode | null = null;
+
 const sun = new DirectionalLight(new Vector3(-0.45, -1, -0.3), [1.0, 0.95, 0.85], 1.8);
 scene.add(sun);
 
@@ -103,6 +112,13 @@ controlsHint.innerHTML =
 document.body.appendChild(controlsHint);
 
 engine.canvas.addEventListener('click', () => {
+  if (!sfxContext) {
+    sfxContext = new AudioContext();
+  }
+  if (sfxContext.state === 'suspended') {
+    void sfxContext.resume();
+  }
+  ensureEngineAudioLoop();
   shipController.requestPointerLock();
 });
 
@@ -145,6 +161,7 @@ engine.on('resize', () => {
 
 engine.on('update', (dt: number) => {
   shipController.update(dt);
+  const shipHud = shipController.getHudState();
 
   for (const anim of backdropAnimators) {
     anim.yaw += anim.yawRate * dt;
@@ -160,8 +177,25 @@ engine.on('update', (dt: number) => {
 
   combatSystem.update(dt);
 
+  const combatHud = combatSystem.getHudState();
+  if (combatHud.hitConfirm > 0 && lastHitConfirm <= 0) {
+    playTone(980, 0.05, 'triangle', 0.03);
+    playTone(1320, 0.032, 'sine', 0.016);
+  }
+  if (combatHud.incomingHit > 0 && lastIncomingHit <= 0) {
+    playTone(180, 0.09, 'square', 0.04);
+  }
+  if (combatHud.enemiesAlive < lastEnemiesAlive) {
+    playTargetDestroyedTone();
+  }
+  lastHitConfirm = combatHud.hitConfirm;
+  lastIncomingHit = combatHud.incomingHit;
+  lastEnemiesAlive = combatHud.enemiesAlive;
+
+  updateEngineAudio(shipHud.throttle, shipHud.speed, dt);
+
   const indicators = buildOffscreenEnemyIndicators(camera, combatSystem.getEnemyTrackingTargets());
-  cockpitHud.render(shipController.getHudState(), combatSystem.getHudState(), indicators);
+  cockpitHud.render(shipHud, combatHud, indicators);
 
   scene.updateMatrixWorld();
 });
@@ -307,6 +341,89 @@ function setLightUniforms(shader: ShaderProgram, lights: Light[]): void {
       shader.setFloat(`${prefix}.outerAngle`, 0);
     }
   }
+}
+
+function playTone(freq: number, duration: number, type: OscillatorType, gainValue: number): void {
+  if (!sfxContext || sfxContext.state !== 'running') return;
+
+  const osc = sfxContext.createOscillator();
+  const gain = sfxContext.createGain();
+  const now = sfxContext.currentTime;
+
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, now);
+
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(gainValue, now + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+  osc.connect(gain);
+  gain.connect(sfxContext.destination);
+
+  osc.start(now);
+  osc.stop(now + duration);
+}
+
+function playTargetDestroyedTone(): void {
+  if (!sfxContext || sfxContext.state !== 'running') return;
+
+  const now = sfxContext.currentTime;
+  const osc = sfxContext.createOscillator();
+  const gain = sfxContext.createGain();
+
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(420, now);
+  osc.frequency.exponentialRampToValueAtTime(1040, now + 0.12);
+
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.045, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+
+  osc.connect(gain);
+  gain.connect(sfxContext.destination);
+  osc.start(now);
+  osc.stop(now + 0.24);
+}
+
+function ensureEngineAudioLoop(): void {
+  if (!sfxContext || engineOsc) return;
+
+  engineOsc = sfxContext.createOscillator();
+  engineGain = sfxContext.createGain();
+  engineFilter = sfxContext.createBiquadFilter();
+
+  engineOsc.type = 'sawtooth';
+  engineOsc.frequency.value = 80;
+
+  engineFilter.type = 'lowpass';
+  engineFilter.frequency.value = 380;
+  engineFilter.Q.value = 0.6;
+
+  engineGain.gain.value = 0.0001;
+
+  engineOsc.connect(engineFilter);
+  engineFilter.connect(engineGain);
+  engineGain.connect(sfxContext.destination);
+
+  engineOsc.start();
+}
+
+function updateEngineAudio(throttle: number, speed: number, dt: number): void {
+  if (!sfxContext || sfxContext.state !== 'running' || !engineOsc || !engineGain || !engineFilter) return;
+
+  const t = Math.max(-0.35, Math.min(1, throttle));
+  const t01 = (t + 0.35) / 1.35;
+  const speed01 = Math.max(0, Math.min(1, speed / 120));
+
+  const targetFreq = 78 + t01 * 210 + speed01 * 65;
+  const targetGain = 0.006 + t01 * 0.026 + speed01 * 0.012;
+  const targetFilter = 300 + t01 * 1300 + speed01 * 460;
+
+  const now = sfxContext.currentTime;
+  const lerpTime = Math.max(0.01, Math.min(0.08, dt * 2.5));
+  engineOsc.frequency.setTargetAtTime(targetFreq, now, lerpTime);
+  engineGain.gain.setTargetAtTime(targetGain, now, lerpTime);
+  engineFilter.frequency.setTargetAtTime(targetFilter, now, lerpTime);
 }
 
 type BackdropAnimator = {
