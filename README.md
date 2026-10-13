@@ -1,6 +1,6 @@
 # 3D Engine
 
-A fully-featured 3D engine built from scratch using **TypeScript** and **WebGL 2**, with an integrated rigid-body physics engine, post-processing pipeline, and interactive first-person camera.
+A fully-featured 3D engine built from scratch using **TypeScript** and **WebGL 2**, with an integrated rigid-body physics engine, post-processing pipeline, and a playable cockpit space-combat demo.
 
 ![Tech: TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue)
 ![Renderer: WebGL 2](https://img.shields.io/badge/Renderer-WebGL%202-orange)
@@ -9,6 +9,20 @@ A fully-featured 3D engine built from scratch using **TypeScript** and **WebGL 2
 ---
 
 ## Features
+
+### Space Combat Demo (Current)
+- Cockpit-style ship control with mouse look and inertial flight handling
+- Two weapon modes:
+	- **Pulse**: fast, lighter shots
+	- **Plasma**: slower, heavier shots (with larger lead requirement)
+- Weapon heat + energy model with HUD feedback
+- Predictive **track-ahead marker** (visual lead indicator only; no auto-aim steering)
+- HUD targeting overlay: target box, lead marker, off-screen enemy arrows, lock/scan state
+- Enemy squad behavior tuned for fun dogfights:
+	- split-and-encircle movement around player
+	- short evade bursts when hit
+	- burst-fire patterns and predictive enemy shooting
+	- movement smoothing to avoid abrupt start/stop behavior
 
 ### Rendering
 - **WebGL 2** rendering pipeline with VAO/VBO/EBO abstractions
@@ -31,7 +45,7 @@ A fully-featured 3D engine built from scratch using **TypeScript** and **WebGL 2
 
 ### Camera
 - Perspective and orthographic cameras
-- **First-person mode** with physics-driven movement — the camera has a dynamic rigid body with a box collider, affected by gravity and scene collisions
+- **Cockpit mode** attached to the player ship for space combat
 - **Orbit mode** — rotate/zoom/pan around a target
 - **Fly mode** — free WASD movement
 - Pointer lock support for mouse look
@@ -92,14 +106,22 @@ npm test
 
 ---
 
-## Controls
+## Controls (Space Combat Demo)
 
 | Input | Action |
 |-------|--------|
 | **Click canvas** | Lock mouse pointer for mouse look |
-| **W / A / S / D** | Move forward / left / backward / right |
-| **Space** | Jump |
-| **Mouse move** | Look around |
+| **Mouse move** | Aim / rotate ship |
+| **W / S** | Increase / decrease throttle |
+| **A / D** | Strafe left / right |
+| **Q / E** | Roll left / right |
+| **LMB / Space** | Fire primary weapon |
+| **1 / 2** | Switch weapon mode (Pulse / Plasma) |
+| **C** | Cycle target |
+| **L** | Select/toggle target lock |
+| **Shift** | Boost |
+| **Ctrl** | Brake |
+| **T** | Toggle flight assist |
 | **F3** | Toggle debug overlay |
 | **Esc** | Release pointer lock |
 
@@ -161,11 +183,10 @@ tests/             — Vitest unit tests for all math library modules
 
 The built-in demo (`src/demo.ts`) includes:
 
-- A stacked tower of coloured physics boxes and a dropping sphere
-- A directional "sun" light with real-time shadow mapping
-- A point light for fill lighting
-- A field of 100 instanced decorative boxes
-- A fire-fountain particle emitter
-- A dark solid-colour skybox
-- A physics-driven first-person camera you can walk, jump, and collide with objects
-- The full post-processing stack (bloom, tone mapping, FXAA, vignette)
+- A playable cockpit spaceship with inertial movement and boost/brake controls
+- Combat HUD with throttle/speed tapes, weapon state, target status, and incoming-hit feedback
+- Predictive lead marker that updates from relative motion and active weapon projectile speed
+- Target overlays and off-screen enemy direction arrows (including a distinct targeted-arrow color)
+- Multiple enemy ships with encirclement, burst-fire behavior, and evasive responses
+- Space backdrop (skybox + planets/stars/nebula styling)
+- Directional + point lighting and full post-processing stack (bloom, tone mapping, FXAA, vignette)
