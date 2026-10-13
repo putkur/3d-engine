@@ -122,3 +122,8 @@ export type { AudioSourceOptions, DistanceModel } from './audio/AudioSource';
 export { AudioManager } from './audio/AudioManager';
 export type { ChannelName } from './audio/AudioManager';
 export { AudioLoader } from './audio/AudioLoader';
+
+// Gameplay
+export { ShipFlightController } from './gameplay/ShipFlightController';
+export type { ShipFlightControllerOptions, ShipHudState } from './gameplay/ShipFlightController';
+export { CockpitHUD } from './gameplay/CockpitHUD';

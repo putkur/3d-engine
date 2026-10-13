@@ -2,14 +2,12 @@ import { Engine } from './core/Engine';
 import { Renderer } from './renderer/Renderer';
 import { ShaderProgram } from './renderer/ShaderProgram';
 import { Vector3 } from './math/Vector3';
-import { Quaternion } from './math/Quaternion';
 import { Matrix4 } from './math/Matrix4';
 import { Scene } from './scene/Scene';
 import { Geometry } from './scene/Geometry';
 import { Material } from './scene/Material';
 import { Mesh } from './scene/Mesh';
 import { PerspectiveCamera } from './camera/PerspectiveCamera';
-import { CameraController, CameraMode } from './camera/CameraController';
 import { DirectionalLight } from './lighting/DirectionalLight';
 import { PointLight } from './lighting/PointLight';
 import { ShadowMap } from './lighting/ShadowMap';
@@ -40,6 +38,8 @@ import { AudioManager } from './audio/AudioManager';
 import { AudioListener } from './audio/AudioListener';
 import { AudioClip } from './audio/AudioClip';
 import { AudioSource } from './audio/AudioSource';
+import { ShipFlightController } from './gameplay/ShipFlightController';
+import { CockpitHUD } from './gameplay/CockpitHUD';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -240,35 +240,50 @@ inspector.attach(scene, debugRenderer);
 // --- Camera ---
 const aspect = engine.canvas.width / engine.canvas.height;
 const camera = new PerspectiveCamera(90, aspect, 0.1, 100);
-scene.add(camera);
-
-camera.transform.setPosition(0, 2, 8);
-
-// --- Camera physics body ---
-const cameraBody = new RigidBody(BodyType.DYNAMIC);
-cameraBody.position = new Vector3(0, 2, 8);
-cameraBody.mass = 7;
-cameraBody.collider = new BoxCollider(new Vector3(0.3, 0.8, 0.3));
-cameraBody.computeInertia();
-cameraBody.restitution = 0.0;
-cameraBody.friction = 0.5;
-cameraBody.linearDamping = 0.05;
-cameraBody.angularDamping = 1.0; // prevent tumbling
-cameraBody.sceneNode = camera;
-physicsWorld.addBody(cameraBody);
-
-const controller = new CameraController(camera, engine.input, {
-  mode: CameraMode.FIRST_PERSON,
-  moveSpeed: 5,
-  lookSensitivity: 0.1,
-  damping: 0.05,
-  rigidBody: cameraBody,
-  jumpSpeed: 5,
+const shipGeo = Geometry.createBox(1.2, 0.4, 2.4);
+const shipMat = new Material(program, {
+  color: [0.7, 0.78, 0.9, 1.0],
+  specular: 0.9,
+  shininess: 96,
 });
+const shipMesh = new Mesh(shipGeo, shipMat, 'player-ship');
+shipMesh.transform.setPosition(0, 2, 8);
+scene.add(shipMesh);
+
+const shipBody = new RigidBody(BodyType.KINEMATIC);
+shipBody.position = new Vector3(0, 2, 8);
+shipBody.collider = new BoxCollider(new Vector3(0.6, 0.2, 1.2));
+shipBody.computeInertia();
+shipBody.restitution = 0.0;
+shipBody.friction = 0.35;
+shipBody.sceneNode = shipMesh;
+physicsWorld.addBody(shipBody);
+
+// Cockpit camera rig: camera rides as a child of the player ship.
+shipMesh.add(camera);
+camera.transform.setPosition(0, 0.18, 0.52);
+
+const shipController = new ShipFlightController(engine.input, shipBody, {
+  lookSensitivity: 0.09,
+  maxForwardSpeed: 74,
+  maxReverseSpeed: 21,
+  boostMultiplier: 1.45,
+  acceleration: 30,
+  brakeDamping: 2.9,
+  lateralDamping: 3.9,
+  throttleChangeRate: 0.9,
+  throttleSmoothing: 3.4,
+  angularResponse: 8.8,
+  maxPitchRate: 88,
+  maxYawRate: 92,
+  maxRollRate: 122,
+});
+
+const cockpitHud = new CockpitHUD();
 
 // Click canvas to lock pointer for mouse look
 engine.canvas.addEventListener('click', () => {
-  controller.requestPointerLock();
+  shipController.requestPointerLock();
 });
 
 // --- Phase 13: Animated robot character ---
@@ -679,7 +694,7 @@ const renderQueue  = new RenderQueue();
 
 // Physics worker host — initialised after all bodies are created; starts engine when ready.
 let physicsHost: PhysicsWorkerHost | null = null;
-let cameraBodyIdx = -1;
+let shipBodyIdx = -1;
 
 // --- Settings UI ---
 const panel = document.createElement('div');
@@ -711,7 +726,7 @@ function addSlider(label: string, min: number, max: number, step: number, value:
 }
 
 addSlider('FOV', 30, 120, 1, camera.fov, (v) => { camera.fov = v; });
-addSlider('Sensitivity', 0.05, 1, 0.05, controller.lookSensitivity, (v) => { controller.lookSensitivity = v; });
+addSlider('Sensitivity', 0.01, 0.35, 0.005, shipController.lookSensitivity, (v) => { shipController.lookSensitivity = v; });
 addSlider('Exposure', 0.1, 3, 0.1, postProcess.exposure, (v) => { postProcess.exposure = v; });
 addSlider('Bloom', 0, 1, 0.05, postProcess.bloomStrength, (v) => { postProcess.bloomStrength = v; });
 addSlider('Vignette', 0, 1, 0.05, postProcess.vignetteStrength, (v) => { postProcess.vignetteStrength = v; });
@@ -759,6 +774,7 @@ setDebugMode(debugMode);
 engine.on('resize', () => {
   camera.aspect = engine.canvas.width / engine.canvas.height;
   postProcess.resize(engine.canvas.width, engine.canvas.height);
+  cockpitHud.resize();
 });
 
 /**
@@ -825,19 +841,18 @@ function setLightUniforms(shader: ShaderProgram, lights: Light[]): void {
 
 // --- Physics update on fixed timestep (runs in web worker) ---
 engine.on('fixedUpdate', (fixedDt: number) => {
-  // Lock camera body rotation — zeroed state is pushed to worker via kinematicUpdates
-  cameraBody.angularVelocity.set(0, 0, 0);
-  cameraBody.rotation = Quaternion.identity();
   // Fire-and-forget: transforms are applied asynchronously when the worker responds.
-  physicsHost?.step(fixedDt, [cameraBodyIdx]);
+  physicsHost?.step(fixedDt, [shipBodyIdx]);
   stats.setPhysicsTime(physicsHost?.lastStepTime ?? 0);
 });
 
 // --- Per-frame stats & inspector ---
 engine.on('update', (dt: number) => {
+  shipController.update(dt);
   stats.update(dt);
   inspector.update(dt);
   particles.update(dt);
+  cockpitHud.render(shipController.getHudState());
   // Phase 13 — advance robot animation mixer
   robotMixer.update(dt);
   // Update world matrices immediately after animation so transforms are current
@@ -847,9 +862,6 @@ engine.on('update', (dt: number) => {
 });
 
 engine.on('render', () => {
-  // Update camera controller
-  controller.update(engine.clock.getDelta());
-
   // World matrices already updated in 'update' event (after animation);
   // re-run only for camera changes this frame.
   scene.updateMatrixWorld();
@@ -966,7 +978,7 @@ engine.on('render', () => {
 // Build attachment list from the physicsWorld body registry.
 // Order matches physicsWorld.bodies, so body indices are stable.
 const physicsAttachments = physicsWorld.bodies.map(b => ({ body: b, sceneNode: b.sceneNode }));
-cameraBodyIdx = physicsWorld.bodies.indexOf(cameraBody);
+shipBodyIdx = physicsWorld.bodies.indexOf(shipBody);
 
 physicsHost = new PhysicsWorkerHost();
 physicsHost.init(physicsAttachments, physicsWorld.gravity, physicsWorld.iterations).then(() => {
