@@ -84,6 +84,16 @@ interface EnemyShip {
   orbitPhase: number;
   orbitRadius: number;
   attackCooldown: number;
+  preferredRange: number;
+  aggression: number;
+  strafeSign: number;
+  strafeSwapTimer: number;
+  encircleOffset: number;
+  encircleDir: number;
+  altitudeOffset: number;
+  burstShotsRemaining: number;
+  burstCooldown: number;
+  evadeTimer: number;
 }
 
 interface Projectile {
@@ -105,7 +115,7 @@ const DEFAULTS: Required<ShipCombatOptions> = {
   hullDamage: 14,
   enemyFireCooldown: 0.75,
   enemyProjectileSpeed: 95,
-  enemyProjectileDamage: 12,
+  enemyProjectileDamage: 7,
 };
 
 const WEAPON_PROFILES: Record<WeaponMode, WeaponProfile> = {
@@ -367,10 +377,24 @@ export class ShipCombatSystem {
 
   private fireEnemy(enemy: EnemyShip): void {
     const enemyPos = enemy.mesh.transform.position;
-    const toPlayer = this.shipBody.position.subtract(enemyPos);
+    const toPlayerNow = this.shipBody.position.subtract(enemyPos);
+    const dist = Math.max(1e-6, toPlayerNow.length());
+    const leadTime = Math.min(1.2, dist / Math.max(1e-6, this.opts.enemyProjectileSpeed));
+    const predictedPlayerPos = this.shipBody.position.add(this.shipBody.linearVelocity.scale(leadTime));
+    const toPlayer = predictedPlayerPos.subtract(enemyPos);
     if (toPlayer.lengthSquared() < 1e-6) return;
 
-    const dir = toPlayer.normalizeSelf();
+    let dir = toPlayer.normalizeSelf();
+
+    // Add mild inaccuracy so enemies are dangerous but not laser-perfect.
+    const up = Vector3.up();
+    const right = dir.cross(up).normalizeSelf();
+    const correctedUp = right.cross(dir).normalizeSelf();
+    const jitterStrength = 0.05;
+    dir = dir
+      .add(right.scale((Math.random() * 2 - 1) * jitterStrength))
+      .add(correctedUp.scale((Math.random() * 2 - 1) * jitterStrength))
+      .normalizeSelf();
     const muzzlePosition = enemyPos.add(dir.scale(1.0));
     const velocity = dir.scale(this.opts.enemyProjectileSpeed);
 
@@ -390,7 +414,7 @@ export class ShipCombatSystem {
       position: muzzlePosition.clone(),
       velocity,
       life: this.opts.projectileLifetime * 1.3,
-      radius: 0.1,
+      radius: 0.075,
       fromEnemy: true,
       shieldDamage: 0,
       hullDamage: this.opts.enemyProjectileDamage,
@@ -472,6 +496,9 @@ export class ShipCombatSystem {
     const hullDamage = projectile.hullDamage + shieldDamage * 0.6;
     enemy.hull -= hullDamage;
     enemy.hitFlash = 0.18;
+    enemy.evadeTimer = Math.max(enemy.evadeTimer, 0.55 + Math.random() * 0.55);
+    enemy.strafeSign *= -1;
+    enemy.strafeSwapTimer = 0.35 + Math.random() * 0.45;
     this.hitConfirmRemaining = 0.12;
 
     if (enemy.hull <= 0) {
@@ -482,33 +509,74 @@ export class ShipCombatSystem {
   }
 
   private updateEnemies(dt: number): void {
-    for (const enemy of this.enemies) {
+    const aliveEnemies = this.enemies.filter((enemy) => enemy.alive);
+    const aliveCount = aliveEnemies.length;
+
+    for (let i = 0; i < aliveCount; i++) {
+      const enemy = aliveEnemies[i];
       if (!enemy.alive) continue;
       enemy.hitFlash = Math.max(0, enemy.hitFlash - dt);
+      enemy.evadeTimer = Math.max(0, enemy.evadeTimer - dt);
+      enemy.burstCooldown = Math.max(0, enemy.burstCooldown - dt);
 
       const enemyPos = enemy.mesh.transform.position;
       const prevPos = enemyPos.clone();
-      const toShip = this.shipBody.position.subtract(enemyPos);
+      const shipPos = this.shipBody.position;
+      const toShip = shipPos.subtract(enemyPos);
       const dist = Math.max(1e-6, toShip.length());
       const toShipDir = toShip.scale(1 / dist);
 
-      let tangent = new Vector3(-toShipDir.z, 0, toShipDir.x);
-      if (tangent.lengthSquared() < 1e-6) {
-        tangent = new Vector3(1, 0, 0);
-      } else {
-        tangent.normalizeSelf();
+      const slotAngle = ((i / Math.max(1, aliveCount)) * Math.PI * 2)
+        + enemy.encircleOffset
+        + enemy.orbitPhase;
+      enemy.orbitPhase += dt * (0.28 + enemy.aggression * 0.24) * enemy.encircleDir;
+
+      const slotRadius = enemy.preferredRange;
+      const slotPos = new Vector3(
+        shipPos.x + Math.cos(slotAngle) * slotRadius,
+        shipPos.y + enemy.altitudeOffset,
+        shipPos.z + Math.sin(slotAngle) * slotRadius,
+      );
+
+      const toSlot = slotPos.subtract(enemyPos);
+      const slotDist = Math.max(1e-6, toSlot.length());
+      const slotDir = toSlot.scale(1 / slotDist);
+
+      // Keep enemies distributed around the player instead of collapsing.
+      let separation = Vector3.zero();
+      for (const other of aliveEnemies) {
+        if (other === enemy) continue;
+        const away = enemyPos.subtract(other.mesh.transform.position);
+        const d = away.length();
+        if (d > 1e-4 && d < 10) {
+          separation.addSelf(away.scale((10 - d) / (10 * d)));
+        }
       }
 
-      enemy.orbitPhase += dt * (0.8 + enemy.orbitRadius * 0.01);
-      const radialError = dist - enemy.orbitRadius;
-      const radialSpeed = Math.max(-9, Math.min(9, radialError * 0.9));
-      const verticalSpeed = Math.sin(enemy.orbitPhase) * 0.9;
-      const desiredVelocity = tangent.scale(8.5)
-        .add(toShipDir.scale(radialSpeed))
-        .add(new Vector3(0, verticalSpeed, 0));
+      let evade = Vector3.zero();
+      if (enemy.evadeTimer > 0) {
+        const tangent = new Vector3(-toShipDir.z, 0, toShipDir.x).normalizeSelf();
+        evade = tangent.scale((8 + enemy.aggression * 5) * enemy.strafeSign);
+      }
 
-      enemyPos.addSelf(desiredVelocity.scale(dt));
-      enemy.velocity = dt > 1e-6 ? enemyPos.subtract(prevPos).scale(1 / dt) : Vector3.zero();
+      const slotChaseSpeed = clampScalar(slotDist * (0.55 + enemy.aggression * 0.32), 4, 18);
+      const desiredVelocity = slotDir.scale(slotChaseSpeed)
+        .add(separation.scale(8))
+        .add(evade)
+        .add(new Vector3(0, Math.sin(enemy.orbitPhase + enemy.id * 0.7) * 0.9, 0));
+
+      // Smooth steering to avoid abrupt stop/start movement changes.
+      const response = 1 - Math.exp(-dt * 4.2);
+      const blendedTarget = enemy.velocity.lerp(desiredVelocity, response);
+      const deltaV = blendedTarget.subtract(enemy.velocity);
+      const deltaLen = deltaV.length();
+      const maxDelta = (10 + enemy.aggression * 14) * dt;
+      if (deltaLen > maxDelta && deltaLen > 1e-6) {
+        deltaV.scaleSelf(maxDelta / deltaLen);
+      }
+
+      enemy.velocity.addSelf(deltaV);
+      enemyPos.addSelf(enemy.velocity.scale(dt));
 
       // Steer the enemy nose toward the player with smooth turning.
       const desiredRotation = Quaternion.lookRotation(toShipDir);
@@ -520,9 +588,20 @@ export class ShipCombatSystem {
       const facingDot = facingForward.dot(toShipDir);
 
       enemy.attackCooldown -= dt;
-      if (enemy.attackCooldown <= 0 && dist < 68 && facingDot > 0.92) {
+
+      if (enemy.burstShotsRemaining <= 0 && enemy.burstCooldown <= 0 && dist < 90 && facingDot > (0.78 - enemy.aggression * 0.06)) {
+        enemy.burstShotsRemaining = 2 + Math.floor(Math.random() * 3);
+      }
+
+      if (enemy.burstShotsRemaining > 0 && enemy.attackCooldown <= 0 && dist < 95 && facingDot > (0.72 - enemy.aggression * 0.08)) {
         this.fireEnemy(enemy);
-        enemy.attackCooldown = this.opts.enemyFireCooldown + Math.random() * 0.45;
+        enemy.burstShotsRemaining -= 1;
+        enemy.attackCooldown = this.opts.enemyFireCooldown * (0.24 + Math.random() * 0.2);
+
+        if (enemy.burstShotsRemaining <= 0) {
+          enemy.burstCooldown = 0.65 + Math.random() * 0.9;
+          enemy.attackCooldown = this.opts.enemyFireCooldown * (0.7 + Math.random() * 0.5);
+        }
       }
 
       const shield01 = enemy.shield / enemy.maxShield;
@@ -606,6 +685,16 @@ export class ShipCombatSystem {
         orbitPhase: Math.random() * Math.PI * 2,
         orbitRadius: 24 + i * 3.5,
         attackCooldown: this.opts.enemyFireCooldown * (0.6 + Math.random() * 0.8),
+        preferredRange: 30 + i * 4 + Math.random() * 7,
+        aggression: 0.7 + Math.random() * 0.8,
+        strafeSign: Math.random() > 0.5 ? 1 : -1,
+        strafeSwapTimer: 1.2 + Math.random() * 2.2,
+        encircleOffset: (i / positions.length) * Math.PI * 2,
+        encircleDir: Math.random() > 0.5 ? 1 : -1,
+        altitudeOffset: -2 + Math.random() * 5,
+        burstShotsRemaining: 0,
+        burstCooldown: 0.35 + Math.random() * 0.85,
+        evadeTimer: 0,
       });
     }
   }
@@ -917,4 +1006,8 @@ function clampVectorMagnitude(v: Vector3, maxMagnitude: number): Vector3 {
     return v;
   }
   return v.scale(maxMagnitude / len);
+}
+
+function clampScalar(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
 }
