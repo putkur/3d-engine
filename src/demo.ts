@@ -16,9 +16,9 @@ import { Light, LightType } from './lighting/Light';
 import { phongVert, phongFrag } from './renderer/shaders';
 import { RigidBody, BodyType } from './physics/RigidBody';
 import { BoxCollider } from './physics/BoxCollider';
-import { ShipFlightController } from './gameplay/ShipFlightController';
-import { CockpitHUD, OffscreenEnemyIndicator } from './gameplay/CockpitHUD';
-import { ShipCombatSystem } from './gameplay/ShipCombatSystem';
+import { ShipFlightController, type ShipHudState } from './gameplay/ShipFlightController';
+import { CockpitHUD, OffscreenEnemyIndicator, type TargetingOverlay } from './gameplay/CockpitHUD';
+import { ShipCombatSystem, type TargetingSolution } from './gameplay/ShipCombatSystem';
 
 const engine = new Engine('#engine-canvas');
 engine.init();
@@ -88,9 +88,15 @@ let lastHitConfirm = 0;
 let lastIncomingHit = 0;
 let lastEnemiesAlive = Number.POSITIVE_INFINITY;
 
-let engineOsc: OscillatorNode | null = null;
-let engineGain: GainNode | null = null;
-let engineFilter: BiquadFilterNode | null = null;
+let engineLowOsc: OscillatorNode | null = null;
+let engineHighOsc: OscillatorNode | null = null;
+let engineMasterGain: GainNode | null = null;
+let engineLowGain: GainNode | null = null;
+let engineHighGain: GainNode | null = null;
+let engineLowFilter: BiquadFilterNode | null = null;
+let enginePresenceFilter: BiquadFilterNode | null = null;
+let engineWarpPhase = 0;
+const ENGINE_LOUDNESS = 2.6;
 
 const sun = new DirectionalLight(new Vector3(-0.45, -1, -0.3), [1.0, 0.95, 0.85], 1.8);
 scene.add(sun);
@@ -108,19 +114,22 @@ controlsHint.style.cssText =
 controlsHint.innerHTML =
   '<b>Cockpit Controls</b><br>' +
   'Mouse: aim | W/S throttle | A/D strafe | Q/E roll<br>' +
-  'LMB or Space: fire | Shift: boost | Ctrl: brake | T: FA toggle';
+  'LMB or Space: fire | 1/2 weapon | C cycle target | L select target<br>' +
+  'Shift: boost | Ctrl: brake | T: FA toggle';
 document.body.appendChild(controlsHint);
 
 engine.canvas.addEventListener('click', () => {
-  if (!sfxContext) {
-    sfxContext = new AudioContext();
-  }
-  if (sfxContext.state === 'suspended') {
-    void sfxContext.resume();
-  }
-  ensureEngineAudioLoop();
+  ensureAudioReady();
   shipController.requestPointerLock();
 });
+
+window.addEventListener('keydown', () => {
+  ensureAudioReady();
+}, { passive: true });
+
+window.addEventListener('pointerdown', () => {
+  ensureAudioReady();
+}, { passive: true });
 
 const panel = document.createElement('div');
 panel.style.cssText =
@@ -188,14 +197,15 @@ engine.on('update', (dt: number) => {
   if (combatHud.enemiesAlive < lastEnemiesAlive) {
     playTargetDestroyedTone();
   }
-  lastHitConfirm = combatHud.hitConfirm;
   lastIncomingHit = combatHud.incomingHit;
   lastEnemiesAlive = combatHud.enemiesAlive;
 
-  updateEngineAudio(shipHud.throttle, shipHud.speed, dt);
+  updateEngineAudio(shipHud, dt);
 
-  const indicators = buildOffscreenEnemyIndicators(camera, combatSystem.getEnemyTrackingTargets());
-  cockpitHud.render(shipHud, combatHud, indicators);
+  const targetingSolution = combatSystem.getTargetingSolution();
+  const indicators = buildOffscreenEnemyIndicators(camera, combatSystem.getEnemyTrackingTargets(), targetingSolution);
+  const targetingOverlay = buildTargetingOverlay(camera, targetingSolution);
+  cockpitHud.render(shipHud, combatHud, indicators, targetingOverlay);
 
   scene.updateMatrixWorld();
 });
@@ -245,6 +255,7 @@ engine.start();
 function buildOffscreenEnemyIndicators(
   cam: PerspectiveCamera,
   targets: Array<{ x: number; y: number; z: number }>,
+  targeting: TargetingSolution | null,
 ): OffscreenEnemyIndicator[] {
   const markers: OffscreenEnemyIndicator[] = [];
   const camPos = cam.transform.worldMatrix.getTranslation();
@@ -280,14 +291,67 @@ function buildOffscreenEnemyIndicators(
     }
 
     const inv = edge / Math.max(1e-6, Math.max(Math.abs(nx), Math.abs(ny)));
+    const isTargeted = targeting
+      ? distance(t, targeting.target) < 0.001
+      : false;
     markers.push({
       nx: nx * inv,
       ny: ny * inv,
       behind,
+      targeted: isTargeted,
     });
   }
 
   return markers;
+}
+
+function buildTargetingOverlay(
+  cam: PerspectiveCamera,
+  solution: TargetingSolution | null,
+): TargetingOverlay | undefined {
+  if (!solution) return undefined;
+
+  const target = projectWorldToHudNdc(cam, solution.target);
+  const lead = projectWorldToHudNdc(cam, solution.lead);
+
+  return {
+    targetVisible: target.visible,
+    targetNx: target.nx,
+    targetNy: target.ny,
+    targetDistance: Math.max(0, distance(cam.transform.worldMatrix.getTranslation(), solution.target)),
+    leadVisible: lead.visible,
+    leadNx: lead.nx,
+    leadNy: lead.ny,
+    targetLocked: solution.locked,
+  };
+}
+
+function distance(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = a.z - b.z;
+  return Math.hypot(dx, dy, dz);
+}
+
+function projectWorldToHudNdc(
+  cam: PerspectiveCamera,
+  point: { x: number; y: number; z: number },
+): { nx: number; ny: number; visible: boolean } {
+  const camPos = cam.transform.worldMatrix.getTranslation();
+  const to = new Vector3(point.x - camPos.x, point.y - camPos.y, point.z - camPos.z);
+  const z = to.dot(cam.transform.getForward().normalizeSelf());
+  if (z <= 0.001) {
+    return { nx: 0, ny: 0, visible: false };
+  }
+
+  const x = to.dot(cam.transform.getRight().normalizeSelf());
+  const y = to.dot(cam.transform.getUp().normalizeSelf());
+  const tanHalfV = Math.tan((cam.fov * Math.PI / 180) * 0.5);
+  const tanHalfH = tanHalfV * cam.aspect;
+  const nx = x / (z * tanHalfH);
+  const ny = y / (z * tanHalfV);
+  const visible = Math.abs(nx) <= 1 && Math.abs(ny) <= 1;
+  return { nx, ny, visible };
 }
 
 function getNormalMatrix(model: Matrix4): Float32Array {
@@ -386,44 +450,134 @@ function playTargetDestroyedTone(): void {
 }
 
 function ensureEngineAudioLoop(): void {
-  if (!sfxContext || engineOsc) return;
+  if (!sfxContext || engineLowOsc) return;
 
-  engineOsc = sfxContext.createOscillator();
-  engineGain = sfxContext.createGain();
-  engineFilter = sfxContext.createBiquadFilter();
+  engineLowOsc = sfxContext.createOscillator();
+  engineHighOsc = sfxContext.createOscillator();
 
-  engineOsc.type = 'sawtooth';
-  engineOsc.frequency.value = 80;
+  engineMasterGain = sfxContext.createGain();
+  engineLowGain = sfxContext.createGain();
+  engineHighGain = sfxContext.createGain();
 
-  engineFilter.type = 'lowpass';
-  engineFilter.frequency.value = 380;
-  engineFilter.Q.value = 0.6;
+  engineLowFilter = sfxContext.createBiquadFilter();
+  enginePresenceFilter = sfxContext.createBiquadFilter();
 
-  engineGain.gain.value = 0.0001;
+  engineLowOsc.type = 'triangle';
+  engineLowOsc.frequency.value = 62;
+  engineHighOsc.type = 'sawtooth';
+  engineHighOsc.frequency.value = 140;
 
-  engineOsc.connect(engineFilter);
-  engineFilter.connect(engineGain);
-  engineGain.connect(sfxContext.destination);
+  engineLowFilter.type = 'lowpass';
+  engineLowFilter.frequency.value = 420;
+  engineLowFilter.Q.value = 0.75;
 
-  engineOsc.start();
+  enginePresenceFilter.type = 'bandpass';
+  enginePresenceFilter.frequency.value = 900;
+  enginePresenceFilter.Q.value = 1.2;
+
+  engineLowGain.gain.value = 0.0001;
+  engineHighGain.gain.value = 0.0001;
+  engineMasterGain.gain.value = 0.0001;
+
+  engineLowOsc.connect(engineLowFilter);
+  engineLowFilter.connect(engineLowGain);
+  engineLowGain.connect(engineMasterGain);
+
+  engineHighOsc.connect(enginePresenceFilter);
+  enginePresenceFilter.connect(engineHighGain);
+  engineHighGain.connect(engineMasterGain);
+
+  engineMasterGain.connect(sfxContext.destination);
+
+  engineLowOsc.start();
+  engineHighOsc.start();
 }
 
-function updateEngineAudio(throttle: number, speed: number, dt: number): void {
-  if (!sfxContext || sfxContext.state !== 'running' || !engineOsc || !engineGain || !engineFilter) return;
+function ensureAudioReady(): void {
+  if (!sfxContext) {
+    sfxContext = new AudioContext();
+  }
+  if (sfxContext.state === 'suspended') {
+    void sfxContext.resume();
+  }
+  ensureEngineAudioLoop();
+}
 
-  const t = Math.max(-0.35, Math.min(1, throttle));
-  const t01 = (t + 0.35) / 1.35;
-  const speed01 = Math.max(0, Math.min(1, speed / 120));
+function updateEngineAudio(hud: ShipHudState, dt: number): void {
+  if (
+    !sfxContext ||
+    sfxContext.state !== 'running' ||
+    !engineLowOsc ||
+    !engineHighOsc ||
+    !engineMasterGain ||
+    !engineLowGain ||
+    !engineHighGain ||
+    !engineLowFilter ||
+    !enginePresenceFilter
+  ) {
+    return;
+  }
 
-  const targetFreq = 78 + t01 * 210 + speed01 * 65;
-  const targetGain = 0.006 + t01 * 0.026 + speed01 * 0.012;
-  const targetFilter = 300 + t01 * 1300 + speed01 * 460;
+  if (!engineLowOsc) {
+    ensureEngineAudioLoop();
+    if (!engineLowOsc) {
+      return;
+    }
+  }
+
+  const absSpeed = Math.abs(hud.speed);
+  const speedMagnitude01 = Math.min(1, hud.speedMagnitude / 90);
+  const throttleIntent = Math.min(1, Math.abs(hud.throttle));
+  const throttleTargetIntent = Math.min(1, Math.abs(hud.throttleTarget));
+  const strafeIntent = Math.min(1, Math.abs(hud.strafeInput));
+  const rotationIntent = Math.min(
+    1,
+    (Math.abs(hud.pitchRate) / 90 + Math.abs(hud.yawRate) / 90 + Math.abs(hud.rollRate) / 120) / 3,
+  );
+  const brakingIntent = hud.brakeActive ? 1 : 0;
+  const boostIntent = hud.boostActive ? 1 : 0;
+
+  const maneuverIntent = Math.min(1, strafeIntent * 0.7 + rotationIntent * 0.75 + brakingIntent * 0.45);
+  const throttleResponse = Math.min(1, Math.max(throttleIntent, throttleTargetIntent * 0.85) * 1.25);
+  const drive = Math.min(
+    1,
+    Math.max(
+      throttleResponse * 0.84,
+      throttleIntent * 0.45 + speedMagnitude01 * 0.78 + maneuverIntent * 0.72 + boostIntent * 0.18,
+    ),
+  );
+  const reverse = hud.speed < -0.75 || hud.throttle < -0.08;
+
+  // Fade out hard near idle so the engine settles when drifting/stopped.
+  const idleFade = Math.max(0, Math.min(1, (drive - 0.012) / 0.17));
+
+  engineWarpPhase += dt * (1.4 + drive * 4.8);
+  const flutter = Math.sin(engineWarpPhase) * (1.8 + drive * 4.2);
+  const microPitch = Math.sin(engineWarpPhase * 2.7) * 0.7 + Math.cos(engineWarpPhase * 1.9) * 0.45;
+  const maneuverPitch = rotationIntent * 8 + strafeIntent * 5;
+
+  const targetLowFreq = 52 + drive * 118 + flutter * 0.28 + microPitch * 0.45 + maneuverPitch * 0.22 + (reverse ? -6 : 0);
+  const targetHighFreq = 118 + drive * 290 + flutter * 0.9 + microPitch * 1.05 + maneuverPitch * 0.55 + (reverse ? -16 : 0);
+
+  const targetLowGain = (0.0001 + idleFade * (0.016 + drive * 0.024)) * ENGINE_LOUDNESS;
+  const targetHighGain = (0.00008 + idleFade * (0.005 + drive * 0.016 + maneuverIntent * 0.006)) * ENGINE_LOUDNESS;
+  const targetMasterGain = (0.0001 + idleFade * (0.016 + drive * 0.040)) * ENGINE_LOUDNESS;
+
+  const targetLowFilter = 250 + drive * 950;
+  const targetPresenceFilter = 720 + drive * 1850;
 
   const now = sfxContext.currentTime;
-  const lerpTime = Math.max(0.01, Math.min(0.08, dt * 2.5));
-  engineOsc.frequency.setTargetAtTime(targetFreq, now, lerpTime);
-  engineGain.gain.setTargetAtTime(targetGain, now, lerpTime);
-  engineFilter.frequency.setTargetAtTime(targetFilter, now, lerpTime);
+  const lerpTime = Math.max(0.012, Math.min(0.08, dt * 2.2));
+
+  engineLowOsc.frequency.setTargetAtTime(targetLowFreq, now, lerpTime);
+  engineHighOsc.frequency.setTargetAtTime(targetHighFreq, now, lerpTime);
+
+  engineLowGain.gain.setTargetAtTime(targetLowGain, now, lerpTime);
+  engineHighGain.gain.setTargetAtTime(targetHighGain, now, lerpTime);
+  engineMasterGain.gain.setTargetAtTime(targetMasterGain, now, lerpTime);
+
+  engineLowFilter.frequency.setTargetAtTime(targetLowFilter, now, lerpTime);
+  enginePresenceFilter.frequency.setTargetAtTime(targetPresenceFilter, now, lerpTime);
 }
 
 type BackdropAnimator = {

@@ -24,9 +24,12 @@ export interface ShipFlightControllerOptions {
 
 export interface ShipHudState {
   speed: number;
+  speedMagnitude: number;
+  strafeInput: number;
   throttle: number;
   throttleTarget: number;
   boostActive: boolean;
+  brakeActive: boolean;
   flightAssist: boolean;
   pitchDeg: number;
   rollDeg: number;
@@ -64,7 +67,9 @@ export class ShipFlightController {
   private throttleTarget = 0;
   private throttle = 0;
   private boostActive = false;
+  private brakeActive = false;
   private flightAssist = true;
+  private strafeInput = 0;
 
   private pitchRate = 0;
   private yawRate = 0;
@@ -105,6 +110,7 @@ export class ShipFlightController {
     const keyPitch = (kb.isDown('ArrowUp') ? 1 : 0) - (kb.isDown('ArrowDown') ? 1 : 0);
     const keyRoll = (kb.isDown('KeyE') ? 1 : 0) - (kb.isDown('KeyQ') ? 1 : 0);
     const strafeInput = (kb.isDown('KeyD') ? 1 : 0) - (kb.isDown('KeyA') ? 1 : 0);
+    this.strafeInput = strafeInput;
 
     const yawInput = clamp(mouseYaw + keyYaw * 0.85, -3, 3);
     const pitchInput = clamp(mousePitch + keyPitch * 0.85, -3, 3);
@@ -127,6 +133,7 @@ export class ShipFlightController {
 
     this.boostActive = (kb.isDown('ShiftLeft') || kb.isDown('ShiftRight')) && this.throttle > 0.05;
     const brakeHeld = kb.isDown('ControlLeft') || kb.isDown('ControlRight');
+    this.brakeActive = brakeHeld;
 
     const forward = this.orientation.rotateVector(Vector3.forward()).normalizeSelf();
     const right = this.orientation.rotateVector(Vector3.right()).normalizeSelf();
@@ -194,11 +201,17 @@ export class ShipFlightController {
 
   getHudState(): ShipHudState {
     const euler = this.orientation.toEuler();
+    const forward = this.orientation.rotateVector(Vector3.forward()).normalizeSelf();
+    const signedForwardSpeed = this.body.linearVelocity.dot(forward);
+    const speedMagnitude = this.body.linearVelocity.length();
     return {
-      speed: this.body.linearVelocity.length(),
+      speed: signedForwardSpeed,
+      speedMagnitude,
+      strafeInput: this.strafeInput,
       throttle: this.throttle,
       throttleTarget: this.throttleTarget,
       boostActive: this.boostActive,
+      brakeActive: this.brakeActive,
       flightAssist: this.flightAssist,
       pitchDeg: euler.x,
       rollDeg: euler.z,

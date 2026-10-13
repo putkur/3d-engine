@@ -3,10 +3,17 @@ import type { ShipHudState } from './ShipFlightController';
 
 export interface CockpitCombatHudState {
   weaponReady: boolean;
+  weaponMode: string;
+  weaponHeat01: number;
+  weaponEnergy01: number;
+  weaponOverheated: boolean;
   cooldown01: number;
   cooldownMs: number;
   projectiles: number;
   enemiesAlive: number;
+  targetLocked: boolean;
+  targetName: string;
+  targetDistance: number;
   targetShield01: number;
   targetHull01: number;
   hitConfirm: number;
@@ -15,10 +22,22 @@ export interface CockpitCombatHudState {
   incomingHit: number;
 }
 
+export interface TargetingOverlay {
+  targetVisible: boolean;
+  targetNx: number;
+  targetNy: number;
+  targetDistance: number;
+  leadVisible: boolean;
+  leadNx: number;
+  leadNy: number;
+  targetLocked: boolean;
+}
+
 export interface OffscreenEnemyIndicator {
   nx: number;
   ny: number;
   behind: boolean;
+  targeted?: boolean;
 }
 
 export class CockpitHUD {
@@ -59,6 +78,7 @@ export class CockpitHUD {
     state: ShipHudState,
     combat?: CockpitCombatHudState,
     indicators?: OffscreenEnemyIndicator[],
+    targeting?: TargetingOverlay,
   ): void {
     const ctx = this.ctx;
     const width = this.canvas.width;
@@ -81,7 +101,7 @@ export class CockpitHUD {
     const cx = uiLeft + uiWidth * 0.5;
     const cy = h * 0.5;
 
-    this.drawReticle(ctx, cx, cy, state);
+    this.drawReticle(ctx, cx, cy);
     this.drawThrottleTape(ctx, uiLeft + uiWidth * 0.11, h * 0.2, h * 0.6, state.throttle, state.throttleTarget);
     this.drawSpeedTape(ctx, uiLeft + uiWidth * 0.89, h * 0.2, h * 0.6, state.speed);
     this.drawModeBadges(ctx, uiLeft, uiWidth, h, state);
@@ -90,6 +110,9 @@ export class CockpitHUD {
     }
     if (indicators && indicators.length > 0) {
       this.drawEnemyIndicators(ctx, uiLeft, uiWidth, h, indicators);
+    }
+    if (targeting) {
+      this.drawTargetingOverlay(ctx, uiLeft, uiWidth, h, targeting);
     }
 
     ctx.restore();
@@ -101,7 +124,7 @@ export class CockpitHUD {
     }
   }
 
-  private drawReticle(ctx: CanvasRenderingContext2D, cx: number, cy: number, state: ShipHudState): void {
+  private drawReticle(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
     ctx.strokeStyle = 'rgba(105, 255, 225, 0.95)';
     ctx.lineWidth = 2;
 
@@ -116,22 +139,11 @@ export class CockpitHUD {
     this.line(ctx, cx, cy - 38, cx, cy - 22);
     this.line(ctx, cx, cy + 22, cx, cy + 38);
 
-    // Horizon cue based on roll and pitch.
-    const rollRad = state.rollDeg * (Math.PI / 180);
-    const pitchOffset = clamp(state.pitchDeg, -30, 30) * 2.2;
-    const hx = cx;
-    const hy = cy + pitchOffset;
-    const half = 90;
-
-    ctx.save();
-    ctx.translate(hx, hy);
-    ctx.rotate(-rollRad);
-    ctx.strokeStyle = 'rgba(105, 255, 225, 0.6)';
-    ctx.lineWidth = 1.5;
-    this.line(ctx, -half, 0, -26, 0);
-    this.line(ctx, 26, 0, half, 0);
-    this.line(ctx, 0, -8, 0, 8);
-    ctx.restore();
+    // Center aim reference dot.
+    ctx.fillStyle = 'rgba(170, 255, 235, 0.98)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.9, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   private drawThrottleTape(
@@ -183,8 +195,12 @@ export class CockpitHUD {
     ctx.textAlign = 'center';
     ctx.fillText('SPD', x, y - 8);
 
+    const roundedSpeed = Math.round(speed);
+    const speedAbsText = Math.abs(roundedSpeed).toString().padStart(3, '0');
+    const speedText = roundedSpeed < 0 ? `-${speedAbsText}` : speedAbsText;
+
     ctx.font = '18px monospace';
-    ctx.fillText(`${Math.round(speed).toString().padStart(3, '0')}`, x, y + height * 0.5 + 6);
+    ctx.fillText(speedText, x, y + height * 0.5 + 6);
 
     ctx.font = '11px monospace';
     ctx.fillStyle = 'rgba(160, 245, 225, 0.85)';
@@ -210,14 +226,21 @@ export class CockpitHUD {
 
   private drawCombat(ctx: CanvasRenderingContext2D, uiLeft: number, uiWidth: number, h: number, combat: CockpitCombatHudState): void {
     const panelW = 250;
-    const panelH = 98;
+    const panelH = 128;
     const x = uiLeft + uiWidth * 0.5 - panelW * 0.5;
-    const y = h * 0.81;
+    const y = h * 0.77;
 
     this.panel(ctx, x, y, panelW, panelH);
 
-    const weaponText = combat.weaponReady ? 'PRIMARY READY' : `PRIMARY CD ${Math.ceil(combat.cooldownMs)}ms`;
+    const weaponText = combat.weaponOverheated
+      ? `${combat.weaponMode} OVERHEAT`
+      : combat.weaponReady
+        ? `${combat.weaponMode} READY`
+        : `${combat.weaponMode} CD ${Math.ceil(combat.cooldownMs)}ms`;
     ctx.fillStyle = combat.weaponReady ? 'rgba(165, 255, 190, 0.95)' : 'rgba(255, 215, 130, 0.95)';
+    if (combat.weaponOverheated) {
+      ctx.fillStyle = 'rgba(255, 125, 95, 0.95)';
+    }
     ctx.font = '12px monospace';
     ctx.textAlign = 'left';
     ctx.fillText(weaponText, x + 10, y + 18);
@@ -231,15 +254,38 @@ export class CockpitHUD {
     ctx.fillStyle = 'rgba(120, 255, 225, 0.5)';
     ctx.fillRect(barX + 1, barY + 1, (1 - clamp(combat.cooldown01, 0, 1)) * (barW - 2), barH - 2);
 
+    const meterW = (panelW - 34) * 0.5;
+    const meterY = y + 42;
+    ctx.strokeStyle = 'rgba(120, 255, 225, 0.58)';
+    ctx.strokeRect(x + 10, meterY, meterW, 8);
+    ctx.fillStyle = 'rgba(120, 240, 255, 0.6)';
+    ctx.fillRect(x + 11, meterY + 1, (meterW - 2) * clamp(combat.weaponEnergy01, 0, 1), 6);
+    ctx.fillStyle = 'rgba(170, 240, 255, 0.9)';
+    ctx.font = '10px monospace';
+    ctx.fillText('ENG', x + 10, meterY - 3);
+
+    ctx.strokeStyle = 'rgba(255, 180, 120, 0.58)';
+    ctx.strokeRect(x + 20 + meterW, meterY, meterW, 8);
+    ctx.fillStyle = 'rgba(255, 145, 110, 0.62)';
+    ctx.fillRect(x + 21 + meterW, meterY + 1, (meterW - 2) * clamp(combat.weaponHeat01, 0, 1), 6);
+    ctx.fillStyle = 'rgba(255, 210, 170, 0.9)';
+    ctx.fillText('HEAT', x + 20 + meterW, meterY - 3);
+
     const targetShield = Math.round(clamp(combat.targetShield01, 0, 1) * 100);
     const targetHull = Math.round(clamp(combat.targetHull01, 0, 1) * 100);
     ctx.fillStyle = 'rgba(170, 240, 255, 0.9)';
-    ctx.fillText(`TARGET SHD ${targetShield}%  HULL ${targetHull}%`, x + 10, y + 51);
+    ctx.font = '12px monospace';
+    ctx.fillText(`TARGET SHD ${targetShield}%  HULL ${targetHull}%`, x + 10, y + 67);
+
+    const lockTag = combat.targetLocked ? 'LOCK' : 'SCAN';
+    const lockDistance = Math.round(combat.targetDistance);
+    ctx.fillStyle = combat.targetLocked ? 'rgba(255, 245, 150, 0.92)' : 'rgba(170, 220, 255, 0.82)';
+    ctx.fillText(`${lockTag} ${combat.targetName} ${lockDistance}m`, x + 10, y + 83);
 
     const playerShield = Math.round(clamp(combat.playerShield01, 0, 1) * 100);
     const playerHull = Math.round(clamp(combat.playerHull01, 0, 1) * 100);
     ctx.fillStyle = 'rgba(255, 210, 170, 0.9)';
-    ctx.fillText(`PLAYER SHD ${playerShield}%  HULL ${playerHull}%`, x + 10, y + 67);
+    ctx.fillText(`PLAYER SHD ${playerShield}%  HULL ${playerHull}%`, x + 10, y + 99);
 
     ctx.textAlign = 'right';
     ctx.fillStyle = 'rgba(205, 255, 245, 0.9)';
@@ -249,7 +295,7 @@ export class CockpitHUD {
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255, 120, 120, 0.95)';
       ctx.font = 'bold 12px monospace';
-      ctx.fillText('INCOMING HIT', x + panelW * 0.5, y + 85);
+      ctx.fillText('INCOMING HIT', x + panelW * 0.5, y + 114);
     }
 
     if (combat.hitConfirm > 0) {
@@ -286,7 +332,11 @@ export class CockpitHUD {
 
       // Arrow points toward center (toward target direction from edge marker).
       const size = ind.behind ? 7 : 9;
-      const color = ind.behind ? 'rgba(255, 170, 100, 0.88)' : 'rgba(255, 95, 95, 0.95)';
+      const color = ind.targeted
+        ? 'rgba(255, 235, 120, 0.96)'
+        : ind.behind
+          ? 'rgba(255, 170, 100, 0.88)'
+          : 'rgba(255, 95, 95, 0.95)';
       ctx.fillStyle = color;
       ctx.strokeStyle = 'rgba(15, 25, 25, 0.65)';
       ctx.lineWidth = 1;
@@ -303,10 +353,55 @@ export class CockpitHUD {
       ctx.stroke();
 
       ctx.beginPath();
-      ctx.fillStyle = ind.behind ? 'rgba(255, 210, 120, 0.95)' : 'rgba(255, 120, 120, 0.9)';
+      ctx.fillStyle = ind.targeted
+        ? 'rgba(255, 245, 170, 0.96)'
+        : ind.behind
+          ? 'rgba(255, 210, 120, 0.95)'
+          : 'rgba(255, 120, 120, 0.9)';
       ctx.arc(-size * 1.45, 0, 2.2, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
+    }
+  }
+
+  private drawTargetingOverlay(
+    ctx: CanvasRenderingContext2D,
+    uiLeft: number,
+    uiWidth: number,
+    h: number,
+    targeting: TargetingOverlay,
+  ): void {
+    const cx = uiLeft + uiWidth * 0.5;
+    const cy = h * 0.5;
+    const radiusX = uiWidth * 0.44;
+    const radiusY = h * 0.44;
+
+    if (targeting.targetVisible) {
+      const tx = cx + clamp(targeting.targetNx, -1, 1) * radiusX;
+      const ty = cy - clamp(targeting.targetNy, -1, 1) * radiusY;
+
+      ctx.strokeStyle = targeting.targetLocked ? 'rgba(255, 240, 120, 0.92)' : 'rgba(130, 220, 255, 0.82)';
+      ctx.lineWidth = targeting.targetLocked ? 2 : 1.5;
+      const distance = Math.max(1, targeting.targetDistance);
+      const distanceScale = clamp(115 / distance, 0.55, 2.1);
+      const baseBox = targeting.targetLocked ? 17 : 12;
+      const box = baseBox * distanceScale;
+      ctx.strokeRect(tx - box * 0.5, ty - box * 0.5, box, box);
+    }
+
+    if (targeting.leadVisible) {
+      const lx = cx + clamp(targeting.leadNx, -1, 1) * radiusX;
+      const ly = cy - clamp(targeting.leadNy, -1, 1) * radiusY;
+
+      ctx.strokeStyle = 'rgba(110, 255, 220, 0.94)';
+      ctx.lineWidth = 2;
+      this.line(ctx, lx - 10, ly, lx - 3, ly);
+      this.line(ctx, lx + 3, ly, lx + 10, ly);
+      this.line(ctx, lx, ly - 10, lx, ly - 3);
+      this.line(ctx, lx, ly + 3, lx, ly + 10);
+      ctx.beginPath();
+      ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+      ctx.stroke();
     }
   }
 
